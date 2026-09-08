@@ -1,0 +1,19 @@
+---
+---
+@import "base";
+
+.a, .b { margin: 0; padding: 1px 2px; }
+
+.uses-mixin { @include box($pad); }
+
+@media (min-width: 40em) {
+  .c { display: flex; }
+  .d { color: red; }
+}
+
+.empty { }
+
+/* a loud comment */
+.after-comment { left: 0; }
+
+.calc { width: calc(100% - #{$pad}); }

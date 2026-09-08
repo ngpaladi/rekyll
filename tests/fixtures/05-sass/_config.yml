@@ -1,0 +1,4 @@
+title: Sass Fixture
+timezone: UTC
+sass:
+  sourcemap: never

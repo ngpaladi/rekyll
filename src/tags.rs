@@ -251,3 +251,105 @@ impl Renderable for Link {
         }
     }
 }
+
+// -- highlight --------------------------------------------------------------
+
+/// `{% highlight lang [linenos] %}…{% endhighlight %}`.
+///
+/// Jekyll passes the block to Rouge and wraps the result in a `<figure>`.
+/// rekyll reproduces the wrapper exactly and escapes the code; it does not
+/// emit Rouge's per-token `<span>`s, which would mean porting Rouge's lexers.
+/// For `text`/`plaintext` — Rouge's pass-through lexer — the output is
+/// identical.
+#[derive(Clone, Debug, Default)]
+pub struct HighlightTag;
+
+impl HighlightTag {
+    pub fn new() -> Self {
+        HighlightTag
+    }
+}
+
+impl liquid_core::BlockReflection for HighlightTag {
+    fn start_tag(&self) -> &str {
+        "highlight"
+    }
+    fn end_tag(&self) -> &str {
+        "endhighlight"
+    }
+    fn description(&self) -> &str {
+        "Syntax-highlights a block of code."
+    }
+}
+
+impl liquid_core::ParseBlock for HighlightTag {
+    fn parse(
+        &self,
+        arguments: TagTokenIter<'_>,
+        mut tokens: liquid_core::TagBlock<'_, '_>,
+        _options: &Language,
+    ) -> Result<Box<dyn Renderable>> {
+        let markup = arguments.raw_markup().trim().to_string();
+        let mut parts = markup.split_whitespace();
+        let lang = parts.next().unwrap_or("").to_string();
+        let linenos = parts.any(|p| p == "linenos");
+
+        // The block body is code, so Liquid must not interpret it.
+        let content = tokens.escape_liquid(false)?.to_owned();
+        tokens.assert_empty();
+
+        Ok(Box::new(Highlight { lang, linenos, content }))
+    }
+
+    fn reflection(&self) -> &dyn liquid_core::BlockReflection {
+        self
+    }
+}
+
+#[derive(Debug)]
+struct Highlight {
+    lang: String,
+    linenos: bool,
+    content: String,
+}
+
+impl Renderable for Highlight {
+    fn render_to(&self, writer: &mut dyn Write, _runtime: &dyn Runtime) -> Result<()> {
+        // Jekyll strips the surrounding blank lines before highlighting.
+        let code = self.content.trim_matches('\n');
+        let escaped = code
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+
+        let lang_attrs = if self.lang.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " class=\"language-{}\" data-lang=\"{}\"",
+                self.lang.replace('"', "&quot;"),
+                self.lang.replace('"', "&quot;")
+            )
+        };
+
+        let body = if self.linenos {
+            let lines: Vec<&str> = escaped.split('\n').collect();
+            let gutter: String =
+                (1..=lines.len()).map(|n| format!("{n}\n")).collect::<Vec<_>>().join("");
+            format!(
+                "<table class=\"rouge-table\"><tbody><tr>\
+                 <td class=\"gutter gl\"><pre class=\"lineno\">{gutter}</pre></td>\
+                 <td class=\"code\"><pre>{escaped}\n</pre></td></tr></tbody></table>"
+            )
+        } else {
+            escaped
+        };
+
+        write!(
+            writer,
+            "<figure class=\"highlight\"><pre><code{lang_attrs}>{body}</code></pre></figure>"
+        )
+        .map_err(|e| Error::with_msg(e.to_string()))?;
+        Ok(())
+    }
+}

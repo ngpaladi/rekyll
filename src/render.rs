@@ -5,7 +5,7 @@ use crate::document::{document_to_liquid, Collection, Document};
 use crate::lax::{LaxObject, LaxValue};
 use crate::site::{Page, Site};
 use crate::value::{Object, Value};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use std::collections::{HashMap, HashSet};
 
 /// The Jekyll release whose behaviour this build reproduces. Templates read it
@@ -59,7 +59,8 @@ impl Renderer {
             .tag(crate::tags::IncludeTag::new())
             .tag(crate::tags::IncludeTag::relative())
             .tag(crate::tags::LinkTag::new(urls.clone(), baseurl.clone()))
-            .tag(crate::tags::LinkTag::post_url(urls, baseurl));
+            .tag(crate::tags::LinkTag::post_url(urls, baseurl))
+            .block(crate::tags::HighlightTag::new());
 
         // Registered after the stdlib so Jekyll's overrides win.
         for (name, func) in crate::filters::all() {
@@ -112,7 +113,8 @@ impl Renderer {
             output = self.render_liquid(&output, &payload, &page.relative_path())?;
         }
 
-        output = convert(site, page, &output);
+        output = convert(site, page, &output)
+            .with_context(|| format!("converting {}", page.relative_path()))?;
 
         if place_in_layout(&page.data, &page.ext) {
             output = self.place_in_layouts(site, page, output, &mut payload)?;
@@ -270,11 +272,13 @@ fn place_in_layout(data: &Object, ext: &str) -> bool {
 }
 
 /// Run the matching converter over the content.
-fn convert(site: &Site, page: &Page, content: &str) -> String {
+fn convert(site: &Site, page: &Page, content: &str) -> Result<String> {
     if site.is_markdown(&page.ext) {
-        crate::markdown::convert(site, content)
+        Ok(crate::markdown::convert(site, content))
+    } else if crate::site::is_sass(&page.ext) {
+        crate::sass::compile(site, content, page.ext == ".sass")
     } else {
-        content.to_string()
+        Ok(content.to_string())
     }
 }
 

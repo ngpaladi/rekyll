@@ -583,6 +583,8 @@ impl Site {
         }
         if self.is_markdown(&page.ext) {
             ".html".to_string()
+        } else if is_sass(&page.ext) {
+            ".css".to_string()
         } else {
             page.ext.clone()
         }
@@ -630,6 +632,11 @@ impl Site {
         }
         path
     }
+}
+
+/// Sass sources are converted to CSS.
+pub fn is_sass(ext: &str) -> bool {
+    matches!(ext, ".sass" | ".scss")
 }
 
 /// `EntryFilter#special?`: a leading ".", "_", "#" or "~" on the entry or its

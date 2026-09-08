@@ -1,0 +1,14 @@
+$brand: #336699;
+$pad: 4px;
+
+.nested {
+  a {
+    color: $brand;
+    &:hover { color: red; }
+  }
+}
+
+@mixin box($n) {
+  padding: $n;
+  margin: $n * 2;
+}
