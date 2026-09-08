@@ -110,7 +110,7 @@ impl Object {
         Key: Borrow<Q>,
         Q: Ord + Eq + Hash + ?Sized,
     {
-        self.map.remove(key)
+        self.map.shift_remove(key)
     }
 
     /// Gets the given key's corresponding entry in the map for in-place
@@ -602,7 +602,7 @@ impl<'a> OccupiedEntry<'a> {
     /// ```
     #[inline]
     pub fn remove(self) -> Value {
-        self.occupied.remove()
+        self.occupied.shift_remove()
     }
 }
 

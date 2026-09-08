@@ -6,11 +6,28 @@ use crate::lax::{LaxObject, LaxValue};
 use crate::site::{Page, Site};
 use crate::value::{Object, Value};
 use anyhow::{anyhow, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The Jekyll release whose behaviour this build reproduces. Templates read it
 /// via `{{ jekyll.version }}`, so it has to match for identical output.
 pub const JEKYLL_VERSION: &str = "4.3.2";
+
+/// What a document exposes after being rendered.
+///
+/// `Renderer#render_document` assigns `document.content = output` once the
+/// converter has run and before layouts, then stores the layout result as
+/// `document.output`. `DocumentDrop` reads both live, so `{{ post.content }}`
+/// in an index page yields converted HTML, not Markdown source. Jekyll renders
+/// documents before pages and updates this state as it goes, so a document
+/// rendered earlier is visible in its converted form to one rendered later.
+#[derive(Default, Clone)]
+pub struct Rendered {
+    pub content: String,
+    pub output: String,
+    pub excerpt: String,
+}
+
+pub type RenderState = HashMap<String, Rendered>;
 
 pub struct Renderer {
     parser: liquid::Parser,
@@ -50,8 +67,8 @@ impl Renderer {
     }
 
     /// `Renderer#run` for a page: Liquid, then the converter, then layouts.
-    pub fn render_page(&self, site: &Site, page: &Page) -> Result<String> {
-        let mut payload = site_payload(site);
+    pub fn render_page(&self, site: &Site, page: &Page, state: &RenderState) -> Result<String> {
+        let mut payload = site_payload(site, state);
         payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&page_to_liquid(site, page))));
         payload.insert("paginator", LaxValue::Nil);
 
@@ -89,9 +106,10 @@ impl Renderer {
         site: &Site,
         collection: &Collection,
         doc: &Document,
-    ) -> Result<String> {
-        let mut payload = site_payload(site);
-        let data = doc_to_liquid(site, collection, doc);
+        state: &RenderState,
+    ) -> Result<(String, String)> {
+        let mut payload = site_payload(site, state);
+        let data = doc_to_liquid(site, collection, doc, state);
         payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&data)));
         payload.insert("paginator", LaxValue::Nil);
 
@@ -117,9 +135,51 @@ impl Renderer {
             output = crate::markdown::convert(site, &output);
         }
 
+        // `document.content` is reassigned here, before layouts run.
+        let converted = output.clone();
+
         if place_in_layout(&doc.data, &doc.extname) {
             let page = pseudo_page(doc);
             output = self.place_in_layouts(site, &page, output, &mut payload)?;
+        }
+        Ok((converted, output))
+    }
+
+    /// `Jekyll::Excerpt`: the content up to `excerpt_separator`, rendered
+    /// through Liquid and the converter but never placed in a layout.
+    pub fn render_excerpt(
+        &self,
+        site: &Site,
+        collection: &Collection,
+        doc: &Document,
+        state: &RenderState,
+    ) -> Result<String> {
+        // An explicit `excerpt:` in front matter is used verbatim.
+        if let Some(v) = doc.data.get("excerpt").filter(|v| v.truthy()) {
+            return Ok(v.to_string());
+        }
+        let separator = doc
+            .data
+            .get("excerpt_separator")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| site.config.str("excerpt_separator"))
+            .to_string();
+        if separator.is_empty() {
+            return Ok(String::new());
+        }
+
+        let extracted = extract_excerpt(&doc.content, &separator);
+
+        let mut payload = site_payload(site, state);
+        let data = doc_to_liquid(site, collection, doc, state);
+        payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&data)));
+
+        let mut output = extracted;
+        if render_with_liquid(&doc.data, &output) {
+            output = self.render_liquid(&output, &payload, &doc.relative_path)?;
+        }
+        if site.is_markdown(&doc.extname) {
+            output = crate::markdown::convert(site, &output);
         }
         Ok(output)
     }
@@ -212,10 +272,20 @@ fn pseudo_page(doc: &Document) -> Page {
     }
 }
 
-/// `Document#to_liquid`.
-pub fn doc_to_liquid(site: &Site, collection: &Collection, doc: &Document) -> Object {
+/// `Document#to_liquid`, reading whatever render state the document has
+/// reached so far.
+pub fn doc_to_liquid(
+    site: &Site,
+    collection: &Collection,
+    doc: &Document,
+    state: &RenderState,
+) -> Object {
     let url = site.doc_url(doc);
-    document_to_liquid(doc, collection, &url, "", "")
+    let rendered = state.get(&doc.relative_path);
+    let content = rendered.map(|r| r.content.as_str()).unwrap_or(&doc.content);
+    let output = rendered.map(|r| r.output.as_str()).unwrap_or("");
+    let excerpt = rendered.map(|r| r.excerpt.as_str()).unwrap_or("");
+    document_to_liquid(doc, collection, &url, content, output, excerpt)
 }
 
 /// `Page#to_liquid`: front matter deep-merged with the derived attributes.
@@ -247,9 +317,9 @@ fn url_dir(url: &str) -> String {
 }
 
 /// The `UnifiedPayloadDrop`: site, jekyll, and the per-page slots.
-pub fn site_payload(site: &Site) -> LaxObject {
+pub fn site_payload(site: &Site, state: &RenderState) -> LaxObject {
     let mut root = LaxObject::new();
-    root.insert("site", LaxValue::Object(site_drop(site)));
+    root.insert("site", LaxValue::Object(site_drop(site, state)));
 
     let mut jekyll = LaxObject::new();
     jekyll.insert("version", LaxValue::str(JEKYLL_VERSION));
@@ -267,7 +337,7 @@ pub fn site_payload(site: &Site) -> LaxObject {
 
 /// `SiteDrop`: the configuration as fallback data, with the computed
 /// collections layered on top.
-fn site_drop(site: &Site) -> LaxObject {
+fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     let mut drop = LaxObject::from_value_object(&site.config.0);
 
     // `SiteDrop#config` deliberately returns nil.
@@ -314,7 +384,7 @@ fn site_drop(site: &Site) -> LaxObject {
             c.docs
                 .iter()
                 .rev()
-                .map(|d| LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, c, d))))
+                .map(|d| LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, c, d, state))))
                 .collect()
         })
         .unwrap_or_default();
@@ -323,7 +393,7 @@ fn site_drop(site: &Site) -> LaxObject {
     let mut documents = Vec::new();
     for (collection, doc) in site.documents() {
         documents.push(LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
-            site, collection, doc,
+            site, collection, doc, state,
         ))));
     }
     drop.insert("documents", LaxValue::Array(documents));
@@ -337,7 +407,9 @@ fn site_drop(site: &Site) -> LaxObject {
             .docs
             .iter()
             .map(|d| {
-                LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, collection, d)))
+                LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
+                    site, collection, d, state,
+                )))
             })
             .collect();
         drop.insert(label.clone(), LaxValue::Array(docs));
@@ -359,9 +431,7 @@ fn site_drop(site: &Site) -> LaxObject {
                     c.docs
                         .iter()
                         .map(|d| {
-                            LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
-                                site, c, d,
-                            )))
+                            LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, c, d, state)))
                         })
                         .collect(),
                 ),
@@ -371,8 +441,8 @@ fn site_drop(site: &Site) -> LaxObject {
         .collect();
     drop.insert("collections", LaxValue::Array(collections));
 
-    drop.insert("tags", LaxValue::Object(group_by(site, "tags")));
-    drop.insert("categories", LaxValue::Object(group_by(site, "categories")));
+    drop.insert("tags", LaxValue::Object(group_by(site, "tags", state)));
+    drop.insert("categories", LaxValue::Object(group_by(site, "categories", state)));
     drop.insert("related_posts", LaxValue::Nil);
     drop
 }
@@ -401,13 +471,13 @@ fn basename_no_ext(name: &str) -> String {
 
 /// `Site#tags` / `Site#categories`: posts grouped by each value, with the
 /// group keys in the order Jekyll's post traversal encounters them.
-fn group_by(site: &Site, key: &str) -> LaxObject {
+fn group_by(site: &Site, key: &str, state: &RenderState) -> LaxObject {
     let mut groups: indexmap::IndexMap<String, Vec<LaxValue>> = indexmap::IndexMap::new();
     if let Some(collection) = site.collections.get("posts") {
         for doc in &collection.docs {
             for value in crate::document::string_list(doc.data.get(key)) {
                 groups.entry(value).or_default().push(LaxValue::Object(
-                    LaxObject::from_value_object(&doc_to_liquid(site, collection, doc)),
+                    LaxObject::from_value_object(&doc_to_liquid(site, collection, doc, state)),
                 ));
             }
         }
@@ -474,4 +544,29 @@ fn build_url_index(site: &Site) -> crate::tags::UrlIndex {
         index.insert(rel.clone(), format!("/{}", rel.trim_start_matches('/')));
     }
     index
+}
+
+/// `Excerpt#extract_excerpt`: everything before the separator, with any
+/// Markdown link reference definitions the excerpt refers to appended so that
+/// `[text][ref]` still resolves once the tail is gone.
+fn extract_excerpt(content: &str, separator: &str) -> String {
+    let (head, tail) = match content.find(separator) {
+        None => return content.to_string(),
+        Some(i) => (&content[..i], &content[i + separator.len()..]),
+    };
+    if tail.is_empty() {
+        return head.to_string();
+    }
+
+    let re = regex::Regex::new(r"(?m)^ {0,3}(\[[^\]]+\])(:.+)$").unwrap();
+    let definitions: Vec<String> = re
+        .captures_iter(tail)
+        .filter(|c| head.contains(&c[1]))
+        .map(|c| format!("{}{}", &c[1], &c[2]))
+        .collect();
+
+    if definitions.is_empty() {
+        return head.to_string();
+    }
+    format!("{}\n\n{}", head, definitions.join("\n"))
 }

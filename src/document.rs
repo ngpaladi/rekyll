@@ -290,6 +290,7 @@ pub fn document_to_liquid(
     doc: &Document,
     collection: &Collection,
     url: &str,
+    content: &str,
     output: &str,
     excerpt: &str,
 ) -> Object {
@@ -298,7 +299,7 @@ pub fn document_to_liquid(
     further.insert("relative_path".into(), Value::str(doc.relative_path.clone()));
     further.insert("url".into(), Value::str(url.to_string()));
     further.insert("collection".into(), Value::str(collection.label.clone()));
-    further.insert("content".into(), Value::str(doc.content.clone()));
+    further.insert("content".into(), Value::str(content.to_string()));
     further.insert("output".into(), Value::str(output.to_string()));
     further.insert("excerpt".into(), Value::str(excerpt.to_string()));
     further.insert("date".into(), Value::str(doc.date.to_s()));
