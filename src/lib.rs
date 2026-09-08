@@ -9,3 +9,4 @@ pub mod lax;
 pub mod render;
 pub mod markdown;
 pub mod build;
+pub mod strftime;

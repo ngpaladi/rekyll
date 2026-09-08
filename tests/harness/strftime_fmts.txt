@@ -1,0 +1,17 @@
+%Y-%m-%d
+%Y-%m-%d %H:%M:%S %z
+%-d/%-m/%Y
+%^b %^B %^a %^A
+%b %B %a %A
+%e|%k|%l|%I %p %P
+%j %U %W %V %G %g %u %w
+%s
+%:z %::z %z
+%F %T %D %R %r
+%y %C
+%_d|%0e|%5d|%-5d
+%%Y %n%t
+%c
+%Z
+%L %N
+%#b %#A
