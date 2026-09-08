@@ -1,0 +1,9 @@
+title: Rekyll Test Site
+description: A fixture for differential testing.
+baseurl: ""
+url: "https://example.com"
+timezone: UTC
+future: true
+
+exclude:
+  - excluded.txt

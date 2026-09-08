@@ -1,0 +1,24 @@
+[package]
+name = "rekyll"
+version = "0.1.0"
+edition = "2021"
+description = "Jekyll, but make it Rust"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "alloc"] }
+chrono-tz = "0.10"
+clap = { version = "4", features = ["derive"] }
+globset = "0.4.20"
+indexmap = "2.14.2"
+liquid = "0.26"
+liquid-core = "0.26"
+percent-encoding = "2"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+regex = "1"
+walkdir = "2"
+yaml-rust2 = "0.12"
+
+[profile.release]
+opt-level = 3
