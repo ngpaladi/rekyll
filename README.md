@@ -77,6 +77,15 @@ definition lists, abbreviations and math are not implemented. Kramdown also
 merges adjacent lists that use different bullet markers, where rekyll follows
 CommonMark. See `tests/markdown/divergences/`.
 
+**`site.pages` order for pages sharing a basename.** Jekyll sorts
+`site.pages` with `sort_by!(&:name)` — Ruby's *unstable* sort — over entries
+returned by `Dir.entries` in filesystem order. So `sub/index.html` and
+`other/index.html` come out in an order determined by directory inode layout,
+not by the source tree: the same commit cloned to a different path builds a
+different `site.pages` order in real Jekyll. That order is not a function of
+the input, so it cannot be reproduced. rekyll sorts stably by name, which is
+deterministic. Pages with distinct basenames match exactly.
+
 **Sass source maps.** Jekyll writes a `.css.map` and appends a
 `sourceMappingURL` comment. rekyll does not generate source maps; with
 `sass: {sourcemap: never}` the CSS is byte-identical.
