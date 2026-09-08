@@ -79,6 +79,15 @@ impl<'a> Emitter<'a> {
             parser.into_offset_iter().collect();
 
         self.blocks(&events, 0, events.len());
+
+        // A blank line at the end of the source is a :blank element like any
+        // other, so it contributes a trailing newline. This also covers link
+        // reference definitions, which emit nothing themselves but leave the
+        // blank line before them behind.
+        let last_end = events.iter().map(|(_, r)| r.end).max().unwrap_or(0);
+        if blank_line_between(self.source, last_end, self.source.len()) {
+            self.out.push('\n');
+        }
         self.out
     }
 

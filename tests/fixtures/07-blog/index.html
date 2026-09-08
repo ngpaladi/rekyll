@@ -1,0 +1,18 @@
+---
+layout: default
+title: Archive
+---
+<ul class="posts">
+{% for post in site.posts %}
+  <li>
+    <a href="{{ post.url | relative_url }}">{{ post.title }}</a>
+    <span>{{ post.date | date: "%b %-d, %Y" }}</span>
+    <div class="excerpt">{{ post.excerpt }}</div>
+  </li>
+{% endfor %}
+</ul>
+<h2>By tag</h2>
+{% for tag in site.tags %}
+<h3>{{ tag[0] }} ({{ tag[1] | size }})</h3>
+<ul>{% for p in tag[1] %}<li>{{ p.title }}</li>{% endfor %}</ul>
+{% endfor %}

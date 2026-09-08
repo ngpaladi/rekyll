@@ -507,7 +507,10 @@ fn group_by(site: &Site, key: &str, state: &RenderState) -> LaxObject {
         }
     }
     let mut out = LaxObject::new();
-    for (k, v) in groups {
+    for (k, mut v) in groups {
+        // `Site#post_attr_hash` sorts each group then reverses it, so posts
+        // within a tag or category are newest first.
+        v.reverse();
         out.insert(k, LaxValue::Array(v));
     }
     out
