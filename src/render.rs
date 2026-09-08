@@ -41,6 +41,19 @@ pub type RenderState = HashMap<String, Rendered>;
 pub struct Payload {
     site: std::sync::Arc<LaxValue>,
     jekyll: LaxValue,
+    /// Where each document's object sits inside the drop. The drop exposes the
+    /// same document several times over (posts, documents, the collection's
+    /// key, collections[].docs, each tag and category group), so the locations
+    /// are indexed once and updates go straight to them; searching the tree per
+    /// update made a large site quadratic.
+    doc_paths: HashMap<String, Vec<Vec<Step>>>,
+}
+
+/// One step along a path into the drop.
+#[derive(Debug, Clone)]
+enum Step {
+    Key(String),
+    Index(usize),
 }
 
 impl Payload {
@@ -52,17 +65,34 @@ impl Payload {
             "environment",
             LaxValue::str(std::env::var("JEKYLL_ENV").unwrap_or_else(|_| "development".into())),
         );
+        let site_value = LaxValue::Object(site_drop(site, &empty));
+        let mut doc_paths = HashMap::new();
+        index_documents(&site_value, &mut Vec::new(), &mut doc_paths);
+
         Payload {
-            site: std::sync::Arc::new(LaxValue::Object(site_drop(site, &empty))),
+            site: std::sync::Arc::new(site_value),
             jekyll: LaxValue::Object(jekyll),
+            doc_paths,
         }
     }
 
     /// Reflect a finished document everywhere it appears in the drop, so a
     /// document rendered later sees its converted content.
     pub fn update_document(&mut self, relative_path: &str, rendered: &Rendered) {
+        let paths = match self.doc_paths.get(relative_path) {
+            Some(p) => p.clone(),
+            None => return,
+        };
         let site = std::sync::Arc::make_mut(&mut self.site);
-        patch_document(site, relative_path, rendered);
+        for path in &paths {
+            if let Some(target) = follow_mut(site, path) {
+                if let LaxValue::Object(obj) = target {
+                    obj.insert("content", LaxValue::str(rendered.content.clone()));
+                    obj.insert("output", LaxValue::str(rendered.output.clone()));
+                    obj.insert("excerpt", LaxValue::str(rendered.excerpt.clone()));
+                }
+            }
+        }
     }
 
     /// The per-render root: the shared site drop plus this page's own slots.
@@ -77,32 +107,47 @@ impl Payload {
     }
 }
 
-/// Walk the drop and refresh every copy of one document's object.
-fn patch_document(value: &mut LaxValue, relative_path: &str, rendered: &Rendered) {
+/// Record where every document object appears, keyed by its relative path.
+fn index_documents(
+    value: &LaxValue,
+    path: &mut Vec<Step>,
+    out: &mut HashMap<String, Vec<Vec<Step>>>,
+) {
     match value {
         LaxValue::Array(items) => {
-            for item in items {
-                patch_document(item, relative_path, rendered);
+            for (i, item) in items.iter().enumerate() {
+                path.push(Step::Index(i));
+                index_documents(item, path, out);
+                path.pop();
             }
         }
         LaxValue::Object(obj) => {
-            let is_target = obj
-                .0
-                .get("relative_path")
-                .map(|v| v.to_kstr() == relative_path)
-                .unwrap_or(false);
-            if is_target {
-                obj.insert("content", LaxValue::str(rendered.content.clone()));
-                obj.insert("output", LaxValue::str(rendered.output.clone()));
-                obj.insert("excerpt", LaxValue::str(rendered.excerpt.clone()));
+            if let Some(rp) = obj.0.get("relative_path") {
+                // Documents are the only objects carrying relative_path, and
+                // they never nest, so this subtree needs no further walking.
+                out.entry(rp.to_kstr().to_string()).or_default().push(path.clone());
                 return;
             }
-            for (_, v) in obj.0.iter_mut() {
-                patch_document(v, relative_path, rendered);
+            for (k, v) in obj.0.iter() {
+                path.push(Step::Key(k.clone()));
+                index_documents(v, path, out);
+                path.pop();
             }
         }
         LaxValue::Shared(_) | LaxValue::Nil | LaxValue::Scalar(_) => {}
     }
+}
+
+fn follow_mut<'a>(value: &'a mut LaxValue, path: &[Step]) -> Option<&'a mut LaxValue> {
+    let mut current = value;
+    for step in path {
+        current = match (current, step) {
+            (LaxValue::Object(o), Step::Key(k)) => o.0.get_mut(k)?,
+            (LaxValue::Array(a), Step::Index(i)) => a.get_mut(*i)?,
+            _ => return None,
+        };
+    }
+    Some(current)
 }
 
 pub struct Renderer {

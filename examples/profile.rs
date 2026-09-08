@@ -16,11 +16,9 @@ fn main() {
     let renderer = rekyll::render::Renderer::new(&site).unwrap();
     println!("parser build:    {:?}", t1.elapsed());
 
-    let state = rekyll::render::RenderState::new();
     let t2 = Instant::now();
-    let payload = rekyll::render::site_payload(&site, &state);
-    println!("one payload:     {:?}", t2.elapsed());
-    std::mem::drop(payload);
+    let mut payload = rekyll::render::Payload::new(&site);
+    println!("payload build:   {:?}", t2.elapsed());
 
     let t3 = Instant::now();
     for (_, doc) in site.documents() {
@@ -31,10 +29,18 @@ fn main() {
     let t4 = Instant::now();
     let mut st = rekyll::render::RenderState::new();
     for (collection, doc) in site.documents() {
-        let (c, o) = renderer.render_document(&site, collection, doc, &st).unwrap();
-        st.insert(doc.relative_path.clone(), rekyll::render::Rendered {
-            content: c, output: o, excerpt: String::new(),
-        });
+        let (c, o) = renderer
+            .render_document(&site, collection, doc, &payload, &st)
+            .unwrap();
+        let done = rekyll::render::Rendered { content: c, output: o, excerpt: String::new() };
+        payload.update_document(&doc.relative_path, &done);
+        st.insert(doc.relative_path.clone(), done);
     }
     println!("render all docs: {:?}", t4.elapsed());
+
+    let t5 = Instant::now();
+    for page in &site.pages {
+        std::hint::black_box(renderer.render_page(&site, page, &payload).unwrap());
+    }
+    println!("render pages:    {:?}", t5.elapsed());
 }

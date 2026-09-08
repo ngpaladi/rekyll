@@ -64,7 +64,7 @@ impl<P: super::Runtime, O: ObjectView> super::Runtime for StackFrame<P, O> {
         let key = key.to_kstr();
         let data = &self.data;
         if data.contains_key(key.as_str()) {
-            crate::model::find(data.as_value(), path).map(|v| v.into_owned().into())
+            crate::model::find(data.as_value(), path)
         } else {
             self.parent.get(path)
         }
@@ -304,7 +304,6 @@ impl<P: super::Runtime, O: ObjectView> super::Runtime for SandboxedStackFrame<P,
         let data = &self.data;
         data.get(key.as_str())
             .and_then(|_| crate::model::try_find(data.as_value(), path))
-            .map(|v| v.into_owned().into())
             .ok_or_else(|| Error::with_msg("Unknown variable").context("requested variable", key))
     }
 
