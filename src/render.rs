@@ -5,6 +5,7 @@ use crate::document::{document_to_liquid, Collection, Document};
 use crate::lax::{LaxObject, LaxValue};
 use crate::site::{Page, Site};
 use crate::value::{Object, Value};
+use liquid::ValueView;
 use anyhow::{anyhow, Context, Result};
 use std::collections::{HashMap, HashSet};
 
@@ -28,6 +29,81 @@ pub struct Rendered {
 }
 
 pub type RenderState = HashMap<String, Rendered>;
+
+/// The site-wide half of the Liquid payload.
+///
+/// Building it means materialising every document and page as a Liquid object,
+/// which is far too expensive to redo per template: Jekyll's payload is a Drop
+/// that delegates lazily, so it costs nothing to hand to each render. Here it
+/// is built once and shared by reference, then patched in place as documents
+/// finish rendering, which keeps Jekyll's sequential visibility without the
+/// quadratic rebuild.
+pub struct Payload {
+    site: std::sync::Arc<LaxValue>,
+    jekyll: LaxValue,
+}
+
+impl Payload {
+    pub fn new(site: &Site) -> Payload {
+        let empty = RenderState::new();
+        let mut jekyll = LaxObject::new();
+        jekyll.insert("version", LaxValue::str(JEKYLL_VERSION));
+        jekyll.insert(
+            "environment",
+            LaxValue::str(std::env::var("JEKYLL_ENV").unwrap_or_else(|_| "development".into())),
+        );
+        Payload {
+            site: std::sync::Arc::new(LaxValue::Object(site_drop(site, &empty))),
+            jekyll: LaxValue::Object(jekyll),
+        }
+    }
+
+    /// Reflect a finished document everywhere it appears in the drop, so a
+    /// document rendered later sees its converted content.
+    pub fn update_document(&mut self, relative_path: &str, rendered: &Rendered) {
+        let site = std::sync::Arc::make_mut(&mut self.site);
+        patch_document(site, relative_path, rendered);
+    }
+
+    /// The per-render root: the shared site drop plus this page's own slots.
+    fn root(&self) -> LaxObject {
+        let mut root = LaxObject::new();
+        root.insert("site", LaxValue::Shared(self.site.clone()));
+        root.insert("jekyll", self.jekyll.clone());
+        root.insert("content", LaxValue::Nil);
+        root.insert("layout", LaxValue::Nil);
+        root.insert("paginator", LaxValue::Nil);
+        root
+    }
+}
+
+/// Walk the drop and refresh every copy of one document's object.
+fn patch_document(value: &mut LaxValue, relative_path: &str, rendered: &Rendered) {
+    match value {
+        LaxValue::Array(items) => {
+            for item in items {
+                patch_document(item, relative_path, rendered);
+            }
+        }
+        LaxValue::Object(obj) => {
+            let is_target = obj
+                .0
+                .get("relative_path")
+                .map(|v| v.to_kstr() == relative_path)
+                .unwrap_or(false);
+            if is_target {
+                obj.insert("content", LaxValue::str(rendered.content.clone()));
+                obj.insert("output", LaxValue::str(rendered.output.clone()));
+                obj.insert("excerpt", LaxValue::str(rendered.excerpt.clone()));
+                return;
+            }
+            for (_, v) in obj.0.iter_mut() {
+                patch_document(v, relative_path, rendered);
+            }
+        }
+        LaxValue::Shared(_) | LaxValue::Nil | LaxValue::Scalar(_) => {}
+    }
+}
 
 pub struct Renderer {
     parser: liquid::Parser,
@@ -82,14 +158,14 @@ impl Renderer {
 
     /// Render a bare Liquid string against the site payload. Used by the
     /// filter differential harness.
-    pub fn render_string(&self, site: &Site, template: &str, state: &RenderState) -> Result<String> {
-        let payload = site_payload(site, state);
+    pub fn render_string(&self, site: &Site, template: &str, _state: &RenderState) -> Result<String> {
+        let payload = Payload::new(site).root();
         self.render_liquid(template, &payload, "<string>")
     }
 
     /// `Renderer#run` for a page: Liquid, then the converter, then layouts.
-    pub fn render_page(&self, site: &Site, page: &Page, state: &RenderState) -> Result<String> {
-        let mut payload = site_payload(site, state);
+    pub fn render_page(&self, site: &Site, page: &Page, payload: &Payload) -> Result<String> {
+        let mut payload = payload.root();
         payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&page_to_liquid(site, page))));
         payload.insert("paginator", LaxValue::Nil);
 
@@ -128,10 +204,14 @@ impl Renderer {
         site: &Site,
         collection: &Collection,
         doc: &Document,
+        payload: &Payload,
         state: &RenderState,
     ) -> Result<(String, String)> {
-        let mut payload = site_payload(site, state);
+        let mut payload_root = payload.root();
         let data = doc_to_liquid(site, collection, doc, state);
+        let payload = &mut payload_root;
+        #[allow(unused_mut)]
+        let mut payload = payload;
         payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&data)));
         payload.insert("paginator", LaxValue::Nil);
 
@@ -174,6 +254,7 @@ impl Renderer {
         site: &Site,
         collection: &Collection,
         doc: &Document,
+        payload_in: &Payload,
         state: &RenderState,
     ) -> Result<String> {
         // An explicit `excerpt:` in front matter is used verbatim.
@@ -192,7 +273,7 @@ impl Renderer {
 
         let extracted = extract_excerpt(&doc.content, &separator);
 
-        let mut payload = site_payload(site, state);
+        let mut payload = payload_in.root();
         let data = doc_to_liquid(site, collection, doc, state);
         payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&data)));
 
@@ -401,25 +482,28 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     drop.insert("pages", LaxValue::Array(pages));
     drop.insert("html_pages", LaxValue::Array(html_pages));
     drop.insert("static_files", LaxValue::Array(static_files));
+    // Each document's Liquid object is built once and cloned into the several
+    // places the drop exposes it.
+    let mut built: HashMap<String, LaxValue> = HashMap::new();
+    for (collection, doc) in site.documents() {
+        built.insert(
+            doc.relative_path.clone(),
+            LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
+                site, collection, doc, state,
+            ))),
+        );
+    }
+    let get = |doc: &Document| built.get(&doc.relative_path).cloned().unwrap_or(LaxValue::Nil);
+
     // `SiteDrop#posts` is newest-first, the reverse of the stored order.
-    let posts_collection = site.collections.get("posts");
-    let posts: Vec<LaxValue> = posts_collection
-        .map(|c| {
-            c.docs
-                .iter()
-                .rev()
-                .map(|d| LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, c, d, state))))
-                .collect()
-        })
+    let posts: Vec<LaxValue> = site
+        .collections
+        .get("posts")
+        .map(|c| c.docs.iter().rev().map(&get).collect())
         .unwrap_or_default();
     drop.insert("posts", LaxValue::Array(posts));
 
-    let mut documents = Vec::new();
-    for (collection, doc) in site.documents() {
-        documents.push(LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
-            site, collection, doc, state,
-        ))));
-    }
+    let documents: Vec<LaxValue> = site.documents().iter().map(|(_, d)| get(d)).collect();
     drop.insert("documents", LaxValue::Array(documents));
 
     // `SiteDrop#[]` exposes each non-posts collection under its own label.
@@ -465,8 +549,8 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
         .collect();
     drop.insert("collections", LaxValue::Array(collections));
 
-    drop.insert("tags", LaxValue::Object(group_by(site, "tags", state)));
-    drop.insert("categories", LaxValue::Object(group_by(site, "categories", state)));
+    drop.insert("tags", LaxValue::Object(group_by(site, "tags", &get)));
+    drop.insert("categories", LaxValue::Object(group_by(site, "categories", &get)));
     drop.insert("related_posts", LaxValue::Nil);
     drop
 }
@@ -495,14 +579,12 @@ fn basename_no_ext(name: &str) -> String {
 
 /// `Site#tags` / `Site#categories`: posts grouped by each value, with the
 /// group keys in the order Jekyll's post traversal encounters them.
-fn group_by(site: &Site, key: &str, state: &RenderState) -> LaxObject {
+fn group_by(site: &Site, key: &str, get: &dyn Fn(&Document) -> LaxValue) -> LaxObject {
     let mut groups: indexmap::IndexMap<String, Vec<LaxValue>> = indexmap::IndexMap::new();
     if let Some(collection) = site.collections.get("posts") {
         for doc in &collection.docs {
             for value in crate::document::string_list(doc.data.get(key)) {
-                groups.entry(value).or_default().push(LaxValue::Object(
-                    LaxObject::from_value_object(&doc_to_liquid(site, collection, doc, state)),
-                ));
+                groups.entry(value).or_default().push(get(doc));
             }
         }
     }

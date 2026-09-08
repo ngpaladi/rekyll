@@ -1,6 +1,6 @@
 //! Site generation: render everything, then write it to the destination.
 
-use crate::render::{Rendered, RenderState, Renderer};
+use crate::render::{Payload, RenderState, Rendered, Renderer};
 use crate::site::Site;
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -16,18 +16,20 @@ pub fn build(source: &Path, dest: &Path) -> Result<()> {
 
     // `Site#render` renders documents first, updating each one's converted
     // content and output as it goes, then renders pages against that state.
+    let mut payload = Payload::new(&site);
     let mut state = RenderState::new();
     for (collection, doc) in site.documents() {
         let (content, output) = renderer
-            .render_document(&site, collection, doc, &state)
+            .render_document(&site, collection, doc, &payload, &state)
             .with_context(|| format!("rendering {}", doc.relative_path))?;
         let excerpt = renderer
-            .render_excerpt(&site, collection, doc, &state)
+            .render_excerpt(&site, collection, doc, &payload, &state)
             .with_context(|| format!("rendering excerpt of {}", doc.relative_path))?;
-        state.insert(
-            doc.relative_path.clone(),
-            Rendered { content, output: output.clone(), excerpt },
-        );
+
+        let done = Rendered { content, output: output.clone(), excerpt };
+        payload.update_document(&doc.relative_path, &done);
+        state.insert(doc.relative_path.clone(), done);
+
         if collection.write() {
             rendered.push((site.doc_destination(doc), output));
         }
@@ -35,7 +37,7 @@ pub fn build(source: &Path, dest: &Path) -> Result<()> {
 
     for page in &site.pages {
         let output = renderer
-            .render_page(&site, page, &state)
+            .render_page(&site, page, &payload)
             .with_context(|| format!("rendering {}", page.relative_path()))?;
         rendered.push((site.page_destination(page), output));
     }

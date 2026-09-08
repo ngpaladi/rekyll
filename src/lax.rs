@@ -20,6 +20,10 @@ pub enum LaxValue {
     Scalar(Scalar),
     Array(Vec<LaxValue>),
     Object(LaxObject),
+    /// A shared subtree. The `site` drop is large and identical across every
+    /// page rendered in a pass, so it is built once and referenced rather than
+    /// deep-cloned into each page's payload.
+    Shared(std::sync::Arc<LaxValue>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -109,6 +113,7 @@ impl ValueView for LaxValue {
             LaxValue::Scalar(s) => s.type_name(),
             LaxValue::Array(_) => "array",
             LaxValue::Object(_) => "object",
+            LaxValue::Shared(v) => v.type_name(),
         }
     }
 
@@ -127,6 +132,7 @@ impl ValueView for LaxValue {
                 State::Truthy => true,
                 State::DefaultValue | State::Empty | State::Blank => o.0.is_empty(),
             },
+            LaxValue::Shared(v) => v.query_state(state),
         }
     }
 
@@ -140,6 +146,7 @@ impl ValueView for LaxValue {
                 KStringCow::from_string(joined)
             }
             LaxValue::Object(_) => KStringCow::from_string(self.to_value().to_kstr().to_string()),
+            LaxValue::Shared(v) => KStringCow::from_string(v.to_kstr().to_string()),
         }
     }
 
@@ -155,12 +162,14 @@ impl ValueView for LaxValue {
                 }
                 LValue::Object(out)
             }
+            LaxValue::Shared(v) => v.to_value(),
         }
     }
 
     fn as_scalar(&self) -> Option<ScalarCow<'_>> {
         match self {
             LaxValue::Scalar(s) => Some(s.clone()),
+            LaxValue::Shared(v) => v.as_scalar(),
             _ => None,
         }
     }
@@ -168,6 +177,7 @@ impl ValueView for LaxValue {
     fn as_array(&self) -> Option<&dyn liquid::model::ArrayView> {
         match self {
             LaxValue::Array(a) => Some(a),
+            LaxValue::Shared(v) => v.as_array(),
             _ => None,
         }
     }
@@ -175,12 +185,17 @@ impl ValueView for LaxValue {
     fn as_object(&self) -> Option<&dyn ObjectView> {
         match self {
             LaxValue::Object(o) => Some(o),
+            LaxValue::Shared(v) => v.as_object(),
             _ => None,
         }
     }
 
     fn is_nil(&self) -> bool {
-        matches!(self, LaxValue::Nil)
+        match self {
+            LaxValue::Nil => true,
+            LaxValue::Shared(v) => v.is_nil(),
+            _ => false,
+        }
     }
 }
 
