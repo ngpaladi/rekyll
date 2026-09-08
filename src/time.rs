@@ -32,6 +32,12 @@ impl RTime {
     pub fn timestamp(&self) -> i64 {
         self.at.timestamp()
     }
+
+    /// Day of month, for the ordinal form of `date_to_string`.
+    pub fn at_day(&self) -> u32 {
+        use chrono::Datelike;
+        self.at.day()
+    }
 }
 
 /// Resolve the site's timezone. An unknown name falls back to UTC, which is

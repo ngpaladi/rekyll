@@ -22,13 +22,26 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use std::collections::HashMap;
 
 pub fn convert(site: &Site, content: &str) -> String {
-    let smart = site
-        .config
+    convert_opts(content, smart_quotes(site))
+}
+
+/// Whether `kramdown.smart_quotes` enables typographic substitution.
+pub fn smart_quotes(site: &Site) -> bool {
+    site.config
         .get("kramdown")
         .and_then(|k| k.get("smart_quotes"))
         .map(|v| v.truthy())
-        .unwrap_or(true);
+        .unwrap_or(true)
+}
+
+/// Convert without needing a `Site`, for the `markdownify` filter.
+pub fn convert_opts(content: &str, smart: bool) -> String {
     Emitter::new(content, smart).run()
+}
+
+/// The `smartify` filter: typographic substitution with no block parsing.
+pub fn smartify_text(text: &str) -> String {
+    smartify(text)
 }
 
 /// Kramdown's default `syntax_highlighter_opts.default_lang`, which Jekyll

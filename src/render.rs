@@ -46,14 +46,27 @@ impl Renderer {
         let urls = std::sync::Arc::new(build_url_index(site));
         let baseurl = std::sync::Arc::new(site.config.str("baseurl").to_string());
 
-        let parser = liquid::ParserBuilder::with_stdlib()
+        let ctx = std::sync::Arc::new(crate::filters::FilterCtx {
+            baseurl: site.config.str("baseurl").to_string(),
+            url: site.config.str("url").to_string(),
+            timezone: site.timezone,
+            smart_quotes: crate::markdown::smart_quotes(site),
+            site_time: site.time.clone(),
+        });
+
+        let mut builder = liquid::ParserBuilder::with_stdlib()
             .partials(partials)
             .tag(crate::tags::IncludeTag::new())
             .tag(crate::tags::IncludeTag::relative())
             .tag(crate::tags::LinkTag::new(urls.clone(), baseurl.clone()))
-            .tag(crate::tags::LinkTag::post_url(urls, baseurl))
-            .build()
-            .map_err(|e| anyhow!("building Liquid parser: {e}"))?;
+            .tag(crate::tags::LinkTag::post_url(urls, baseurl));
+
+        // Registered after the stdlib so Jekyll's overrides win.
+        for (name, func) in crate::filters::all() {
+            builder = builder.filter(crate::filters::JekyllFilter::new(name, func, ctx.clone()));
+        }
+
+        let parser = builder.build().map_err(|e| anyhow!("building Liquid parser: {e}"))?;
         Ok(Renderer { parser })
     }
 
@@ -64,6 +77,13 @@ impl Renderer {
             .map_err(|e| anyhow!("Liquid parse error in {path}: {e}"))?;
         tpl.render(globals)
             .map_err(|e| anyhow!("Liquid render error in {path}: {e}"))
+    }
+
+    /// Render a bare Liquid string against the site payload. Used by the
+    /// filter differential harness.
+    pub fn render_string(&self, site: &Site, template: &str, state: &RenderState) -> Result<String> {
+        let payload = site_payload(site, state);
+        self.render_liquid(template, &payload, "<string>")
     }
 
     /// `Renderer#run` for a page: Liquid, then the converter, then layouts.

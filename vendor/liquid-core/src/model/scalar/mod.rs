@@ -87,7 +87,7 @@ impl<'s> ScalarCow<'s> {
     pub fn into_string(self) -> KString {
         match self.0 {
             ScalarCowEnum::Integer(x) => x.to_string().into(),
-            ScalarCowEnum::Float(x) => x.to_string().into(),
+            ScalarCowEnum::Float(x) => ruby_float_to_s(x).into(),
             ScalarCowEnum::Bool(x) => x.to_string().into(),
             ScalarCowEnum::DateTime(x) => x.to_string().into(),
             ScalarCowEnum::Date(x) => x.to_string().into(),
@@ -314,16 +314,42 @@ impl_copyable!(i16, i64);
 impl_copyable!(u32, i64);
 impl_copyable!(i32, i64);
 
+// rekyll: Ruby's Float#to_s always keeps a decimal point, so `1.5 | plus: 1.5`
+// renders "3.0" in Jekyll where Rust's f64 Display gives "3". Liquid values
+// reach templates through this impl, so the formatting belongs here.
+struct RubyFloat(f64);
+
+impl fmt::Display for RubyFloat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&ruby_float_to_s(self.0))
+    }
+}
+
+pub(crate) fn ruby_float_to_s(x: f64) -> String {
+    if x.is_nan() {
+        return "NaN".to_owned();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity".to_owned() } else { "-Infinity".to_owned() };
+    }
+    let s = x.to_string();
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
 impl ValueView for f64 {
     fn as_debug(&self) -> &dyn fmt::Debug {
         self
     }
 
     fn render(&self) -> DisplayCow<'_> {
-        DisplayCow::Borrowed(self)
+        DisplayCow::Owned(Box::new(RubyFloat(*self)))
     }
     fn source(&self) -> DisplayCow<'_> {
-        DisplayCow::Borrowed(self)
+        DisplayCow::Owned(Box::new(RubyFloat(*self)))
     }
     fn type_name(&self) -> &'static str {
         "fractional number"

@@ -16,3 +16,4 @@ pub mod document;
 pub mod defaults;
 pub mod tags;
 pub mod urlfilters;
+pub mod filters;
