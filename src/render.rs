@@ -1,6 +1,7 @@
 //! Liquid rendering, payload assembly and the layout chain (`renderer.rb`).
 
 use crate::config::deep_merge;
+use crate::document::{document_to_liquid, Collection, Document};
 use crate::lax::{LaxObject, LaxValue};
 use crate::site::{Page, Site};
 use crate::value::{Object, Value};
@@ -62,6 +63,47 @@ impl Renderer {
 
         if place_in_layout(&page.data, &page.ext) {
             output = self.place_in_layouts(site, page, output, &mut payload)?;
+        }
+        Ok(output)
+    }
+
+    /// `Renderer#run` for a collection document.
+    pub fn render_document(
+        &self,
+        site: &Site,
+        collection: &Collection,
+        doc: &Document,
+    ) -> Result<String> {
+        let mut payload = site_payload(site);
+        let data = doc_to_liquid(site, collection, doc);
+        payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&data)));
+        payload.insert("paginator", LaxValue::Nil);
+
+        let layout_data = doc
+            .data
+            .get("layout")
+            .and_then(Value::as_str)
+            .and_then(|n| site.layouts.get(n))
+            .map(|l| l.data.clone());
+        payload.insert(
+            "layout",
+            match &layout_data {
+                Some(d) => LaxValue::Object(LaxObject::from_value_object(d)),
+                None => LaxValue::Nil,
+            },
+        );
+
+        let mut output = doc.content.clone();
+        if render_with_liquid(&doc.data, &output) {
+            output = self.render_liquid(&output, &payload, &doc.relative_path)?;
+        }
+        if site.is_markdown(&doc.extname) {
+            output = crate::markdown::convert(site, &output);
+        }
+
+        if place_in_layout(&doc.data, &doc.extname) {
+            let page = pseudo_page(doc);
+            output = self.place_in_layouts(site, &page, output, &mut payload)?;
         }
         Ok(output)
     }
@@ -138,6 +180,26 @@ fn convert(site: &Site, page: &Page, content: &str) -> String {
     } else {
         content.to_string()
     }
+}
+
+/// A minimal `Page` standing in for a document, so the layout chain can be
+/// driven by one code path.
+fn pseudo_page(doc: &Document) -> Page {
+    Page {
+        dir: String::new(),
+        name: doc.relative_path.clone(),
+        basename: String::new(),
+        ext: doc.extname.clone(),
+        data: doc.data.clone(),
+        content: String::new(),
+        output: String::new(),
+    }
+}
+
+/// `Document#to_liquid`.
+pub fn doc_to_liquid(site: &Site, collection: &Collection, doc: &Document) -> Object {
+    let url = site.doc_url(doc);
+    document_to_liquid(doc, collection, &url, "", "")
 }
 
 /// `Page#to_liquid`: front matter deep-merged with the derived attributes.
@@ -229,11 +291,72 @@ fn site_drop(site: &Site) -> LaxObject {
     drop.insert("pages", LaxValue::Array(pages));
     drop.insert("html_pages", LaxValue::Array(html_pages));
     drop.insert("static_files", LaxValue::Array(static_files));
-    drop.insert("posts", LaxValue::Array(Vec::new()));
-    drop.insert("documents", LaxValue::Array(Vec::new()));
-    drop.insert("collections", LaxValue::Array(Vec::new()));
-    drop.insert("tags", LaxValue::Object(LaxObject::new()));
-    drop.insert("categories", LaxValue::Object(LaxObject::new()));
+    // `SiteDrop#posts` is newest-first, the reverse of the stored order.
+    let posts_collection = site.collections.get("posts");
+    let posts: Vec<LaxValue> = posts_collection
+        .map(|c| {
+            c.docs
+                .iter()
+                .rev()
+                .map(|d| LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, c, d))))
+                .collect()
+        })
+        .unwrap_or_default();
+    drop.insert("posts", LaxValue::Array(posts));
+
+    let mut documents = Vec::new();
+    for (collection, doc) in site.documents() {
+        documents.push(LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
+            site, collection, doc,
+        ))));
+    }
+    drop.insert("documents", LaxValue::Array(documents));
+
+    // `SiteDrop#[]` exposes each non-posts collection under its own label.
+    for (label, collection) in &site.collections {
+        if label == "posts" {
+            continue;
+        }
+        let docs: Vec<LaxValue> = collection
+            .docs
+            .iter()
+            .map(|d| {
+                LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, collection, d)))
+            })
+            .collect();
+        drop.insert(label.clone(), LaxValue::Array(docs));
+    }
+
+    // `SiteDrop#collections` is sorted by label.
+    let mut labels: Vec<&String> = site.collections.keys().collect();
+    labels.sort();
+    let collections: Vec<LaxValue> = labels
+        .iter()
+        .map(|label| {
+            let c = &site.collections[*label];
+            let mut o = LaxObject::from_value_object(&c.metadata);
+            o.insert("label", LaxValue::str((*label).clone()));
+            o.insert("relative_directory", LaxValue::str(c.relative_directory()));
+            o.insert(
+                "docs",
+                LaxValue::Array(
+                    c.docs
+                        .iter()
+                        .map(|d| {
+                            LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
+                                site, c, d,
+                            )))
+                        })
+                        .collect(),
+                ),
+            );
+            LaxValue::Object(o)
+        })
+        .collect();
+    drop.insert("collections", LaxValue::Array(collections));
+
+    drop.insert("tags", LaxValue::Object(group_by(site, "tags")));
+    drop.insert("categories", LaxValue::Object(group_by(site, "categories")));
     drop.insert("related_posts", LaxValue::Nil);
     drop
 }
@@ -258,4 +381,24 @@ fn extname(name: &str) -> String {
 fn basename_no_ext(name: &str) -> String {
     let e = extname(name);
     name[..name.len() - e.len()].to_string()
+}
+
+/// `Site#tags` / `Site#categories`: posts grouped by each value, with the
+/// group keys in the order Jekyll's post traversal encounters them.
+fn group_by(site: &Site, key: &str) -> LaxObject {
+    let mut groups: indexmap::IndexMap<String, Vec<LaxValue>> = indexmap::IndexMap::new();
+    if let Some(collection) = site.collections.get("posts") {
+        for doc in &collection.docs {
+            for value in crate::document::string_list(doc.data.get(key)) {
+                groups.entry(value).or_default().push(LaxValue::Object(
+                    LaxObject::from_value_object(&doc_to_liquid(site, collection, doc)),
+                ));
+            }
+        }
+    }
+    let mut out = LaxObject::new();
+    for (k, v) in groups {
+        out.insert(k, LaxValue::Array(v));
+    }
+    out
 }

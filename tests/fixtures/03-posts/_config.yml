@@ -1,0 +1,5 @@
+title: Posts Fixture
+baseurl: ""
+timezone: UTC
+time: 2030-01-01 00:00:00 +0000
+future: false

@@ -20,6 +20,16 @@ pub fn build(source: &Path, dest: &Path) -> Result<()> {
         rendered.push((site.page_destination(page), output));
     }
 
+    for (collection, doc) in site.documents() {
+        if !collection.write() {
+            continue;
+        }
+        let output = renderer
+            .render_document(&site, collection, doc)
+            .with_context(|| format!("rendering {}", doc.relative_path))?;
+        rendered.push((site.doc_destination(doc), output));
+    }
+
     clean_destination(&site)?;
 
     for (path, output) in rendered {

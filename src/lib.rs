@@ -10,3 +10,6 @@ pub mod render;
 pub mod markdown;
 pub mod build;
 pub mod strftime;
+pub mod slug;
+pub mod time;
+pub mod document;

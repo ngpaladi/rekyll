@@ -22,3 +22,6 @@ yaml-rust2 = "0.12"
 
 [profile.release]
 opt-level = 3
+
+[patch.crates-io]
+liquid-core = { path = "vendor/liquid-core" }

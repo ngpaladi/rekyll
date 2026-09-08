@@ -1,0 +1,8 @@
+<article>
+<h1>{{ page.title }}</h1>
+<p>date={{ page.date }}</p>
+<p>url={{ page.url }} id={{ page.id }}</p>
+<p>cats={{ page.categories | join: "," }} tags={{ page.tags | join: "," }}</p>
+<p>slug={{ page.slug }} ext={{ page.ext }} coll={{ page.collection }}</p>
+{{ content }}
+</article>
