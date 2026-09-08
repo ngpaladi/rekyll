@@ -1,0 +1,24 @@
+title: Includes Fixture
+baseurl: "/base"
+timezone: UTC
+time: 2030-01-01 00:00:00 +0000
+collections:
+  staff:
+    output: true
+    permalink: /team/:name/
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+      shared: everywhere
+  - scope:
+      path: "docs"
+    values:
+      layout: default
+      section: documentation
+  - scope:
+      path: ""
+      type: staff
+    values:
+      role: unspecified

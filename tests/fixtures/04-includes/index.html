@@ -1,0 +1,9 @@
+---
+title: Home
+---
+{% include box.html title="Quoted Title" n=3 body=page.title %}
+<p>shared={{ page.shared }} section={{ page.section }}</p>
+<p>link={% link docs/guide.html %}</p>
+<p>posturl={% post_url 2020-01-01-launch %}</p>
+<ul>{% for s in site.staff %}<li>{{ s.title }} / {{ s.role }} / {{ s.url }}</li>
+{% endfor %}</ul>

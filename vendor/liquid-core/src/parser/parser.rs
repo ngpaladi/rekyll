@@ -761,6 +761,10 @@ impl<'a> BlockElement<'a> {
 pub struct TagTokenIter<'a> {
     iter: Box<dyn Iterator<Item = TagToken<'a>> + 'a>,
     position: ::pest::Position<'a>,
+    // rekyll: the tag's argument text exactly as written. Jekyll's own tags
+    // ({% include f.html a="b" %}, {% highlight rb linenos %}) do not follow
+    // Liquid's argument grammar, so they must parse their own markup.
+    raw: &'a str,
 }
 impl<'a> Iterator for TagTokenIter<'a> {
     type Item = TagToken<'a>;
@@ -772,10 +776,17 @@ impl<'a> Iterator for TagTokenIter<'a> {
 }
 impl<'a> TagTokenIter<'a> {
     fn new(name: &Pair<'a>, tokens: Pairs<'a>) -> Self {
+        let raw = tokens.as_str();
         TagTokenIter {
             iter: Box::new(tokens.map(TagToken::from)),
             position: name.as_span().end_pos(),
+            raw,
         }
+    }
+
+    /// The tag's arguments as written in the source, before tokenization.
+    pub fn raw_markup(&self) -> &'a str {
+        self.raw
     }
 
     /// Creates an error with the given message pointing at the current

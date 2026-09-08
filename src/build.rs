@@ -9,7 +9,7 @@ pub fn build(source: &Path, dest: &Path) -> Result<()> {
     let mut site = Site::new(source, dest)?;
     site.read()?;
 
-    let renderer = Renderer::new()?;
+    let renderer = Renderer::new(&site)?;
 
     // Render before writing so a template error leaves the destination alone.
     let mut rendered: Vec<(std::path::PathBuf, String)> = Vec::new();

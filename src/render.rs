@@ -17,8 +17,24 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new() -> Result<Renderer> {
+    /// Build a parser bound to this site: `_includes` become Liquid partials
+    /// and the URL index backs the `link` / `post_url` tags.
+    pub fn new(site: &Site) -> Result<Renderer> {
+        let mut source = liquid::partials::InMemorySource::new();
+        for (name, content) in load_includes(site)? {
+            source.add(name, content);
+        }
+        let partials = liquid::partials::EagerCompiler::new(source);
+
+        let urls = std::sync::Arc::new(build_url_index(site));
+        let baseurl = std::sync::Arc::new(site.config.str("baseurl").to_string());
+
         let parser = liquid::ParserBuilder::with_stdlib()
+            .partials(partials)
+            .tag(crate::tags::IncludeTag::new())
+            .tag(crate::tags::IncludeTag::relative())
+            .tag(crate::tags::LinkTag::new(urls.clone(), baseurl.clone()))
+            .tag(crate::tags::LinkTag::post_url(urls, baseurl))
             .build()
             .map_err(|e| anyhow!("building Liquid parser: {e}"))?;
         Ok(Renderer { parser })
@@ -401,4 +417,61 @@ fn group_by(site: &Site, key: &str) -> LaxObject {
         out.insert(k, LaxValue::Array(v));
     }
     out
+}
+
+/// Read `_includes` into partials keyed by their path within the directory.
+/// `include_relative` targets are registered under a reserved prefix so both
+/// tags can share one store.
+fn load_includes(site: &Site) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+
+    let dir = site.source.join(site.config.str("includes_dir"));
+    if dir.is_dir() {
+        for entry in walkdir::WalkDir::new(&dir).sort_by_file_name() {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let name = entry
+                .path()
+                .strip_prefix(&dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push((name, std::fs::read_to_string(entry.path())?));
+        }
+    }
+
+    // `include_relative` resolves against the including file's directory. The
+    // whole source tree is registered so any relative target can be found.
+    for entry in walkdir::WalkDir::new(&site.source).sort_by_file_name() {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = entry.path().strip_prefix(&site.source).unwrap().to_string_lossy().to_string();
+        if rel.starts_with('_') && !rel.starts_with("_includes") {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(entry.path()) {
+            out.push((format!("__relative__/{rel}"), text));
+        }
+    }
+    Ok(out)
+}
+
+/// Source path to output URL, for `{% link %}` and `{% post_url %}`.
+fn build_url_index(site: &Site) -> crate::tags::UrlIndex {
+    let mut index = crate::tags::UrlIndex::new();
+    for page in &site.pages {
+        index.insert(page.relative_path(), site.page_url(page));
+    }
+    for (_, doc) in site.documents() {
+        index.insert(doc.relative_path.clone(), site.doc_url(doc));
+    }
+    for file in &site.static_files {
+        let rel = file.relative_path();
+        index.insert(rel.clone(), format!("/{}", rel.trim_start_matches('/')));
+    }
+    index
 }

@@ -13,3 +13,6 @@ pub mod strftime;
 pub mod slug;
 pub mod time;
 pub mod document;
+pub mod defaults;
+pub mod tags;
+pub mod urlfilters;

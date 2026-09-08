@@ -3,6 +3,7 @@
 //! Mirrors `jekyll/site.rb`, `reader.rb`, `page.rb` and `renderer.rb`.
 
 use crate::config::{deep_merge, Config};
+use crate::defaults::Defaults;
 use crate::document::{
     categories_from_path, date_filename_matcher, document_to_liquid, generate_url_from_drop,
     pluralized, populate_title, Collection, Document, UrlDrop,
@@ -86,6 +87,7 @@ pub struct Site {
     pub markdown_exts: Vec<String>,
     pub collections: IndexMap<String, Collection>,
     pub timezone: Tz,
+    pub defaults: Defaults,
     /// `Site#time`: the pinned `time:` from configuration, else process start.
     pub time: RTime,
 }
@@ -119,6 +121,8 @@ impl Site {
             }
         }
 
+        let defaults = Defaults::new(config.get("defaults"), config.str("collections_dir"));
+
         Ok(Site {
             config,
             source: source.to_path_buf(),
@@ -130,6 +134,7 @@ impl Site {
             markdown_exts,
             collections,
             timezone,
+            defaults,
             time,
         })
     }
@@ -339,7 +344,7 @@ impl Site {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading document {}", path.display()))?;
         let parsed = frontmatter::parse(&text);
-        let mut data = parsed.data;
+        let mut data = deep_merge(&self.defaults.all(relative_path, label), &parsed.data);
 
         let extname = Path::new(relative_path)
             .extension()
@@ -498,12 +503,15 @@ impl Site {
             .unwrap_or_default();
         let basename = name[..name.len() - ext.len()].trim_end_matches('.').to_string();
 
+        let relative_path = join_path(dir, name).trim_start_matches('/').to_string();
+        let data = deep_merge(&self.defaults.all(&relative_path, "pages"), &parsed.data);
+
         Ok(Page {
             dir: dir.to_string(),
             name: name.to_string(),
             basename,
             ext,
-            data: parsed.data,
+            data,
             content: parsed.content,
             output: String::new(),
         })

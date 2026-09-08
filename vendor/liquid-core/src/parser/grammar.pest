@@ -57,7 +57,17 @@ Literal = { NilLiteral | EmptyLiteral | BlankLiteral | StringLiteral | FloatLite
 
 Range = { "(" ~ Value ~ ".." ~ Value ~ ")" }
 
-TagToken = _{ Range | FilterChain | DoubleCharSymbol | SingleCharSymbol }
+// rekyll: UnstructuredToken is a last-resort fallback so that a tag whose
+// arguments do not follow Liquid's grammar still tokenizes, letting the tag
+// implementation read TagTokenIter::raw_markup() and parse its own syntax.
+// Jekyll's tags need this: {% include nav/menu.html a="b" %} and
+// {% post_url 2020-01-01-name %} are not valid Liquid argument lists. It is
+// tried only after every real production fails, so tags that do use Liquid
+// syntax are unaffected; they now report their own error rather than a parse
+// error.
+TagToken = _{ Range | FilterChain | DoubleCharSymbol | SingleCharSymbol | UnstructuredToken }
+
+UnstructuredToken = @{ (!(WHITESPACE | "%}" | "-%}") ~ ANY)+ }
 
 // DoubleCharSymbol must be tried first, otherwise it could be parsed as two SingleCharSymbol instead
 SingleCharSymbol = _{ GreaterThan | LesserThan | Assign | Comma | Colon }
