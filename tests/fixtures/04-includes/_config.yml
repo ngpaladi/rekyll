@@ -6,6 +6,8 @@ collections:
   staff:
     output: true
     permalink: /team/:name/
+  posts:
+    output: true
 defaults:
   - scope:
       path: ""

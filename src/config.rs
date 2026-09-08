@@ -179,13 +179,18 @@ impl Config {
             .cloned()
             .unwrap_or_default();
 
-        // `deep_merge_hashes({"posts" => {}}, collections)` — posts comes first.
-        if !collections.contains_key("posts") {
-            let mut with_posts = Object::new();
-            with_posts.insert("posts".into(), Value::Object(Object::new()));
-            with_posts.extend(collections);
-            collections = with_posts;
-        }
+        // `deep_merge_hashes({"posts" => {}}, collections)` puts posts first
+        // whether or not the user listed it, and listing it later does not
+        // move it.
+        let mut ordered = Object::new();
+        ordered.insert(
+            "posts".into(),
+            collections
+                .shift_remove("posts")
+                .unwrap_or_else(|| Value::Object(Object::new())),
+        );
+        ordered.extend(collections);
+        collections = ordered;
 
         let posts = collections
             .entry("posts".into())

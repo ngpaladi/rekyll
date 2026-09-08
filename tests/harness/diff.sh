@@ -20,7 +20,8 @@ run_one() {
     echo "  [SKIP] $name (jekyll build failed; see $WORK/$name/jekyll.log)"
     return 2
   fi
-  if ! "$REKYLL_BIN" build -s "$src" -d "$act" >"$WORK/$name/rekyll.log" 2>&1; then
+  if ! JEKYLL_ENV=development "$REKYLL_BIN" build -s "$src" -d "$act" \
+        >"$WORK/$name/rekyll.log" 2>&1; then
     echo "  [FAIL] $name (rekyll build failed)"
     tail -20 "$WORK/$name/rekyll.log" | sed 's/^/      /'
     return 1

@@ -17,7 +17,10 @@ fn fm_regex() -> &'static Regex {
     // (?s) = Ruby's /m (dot matches newline); (?m) enables ^/$ per line, which
     // Ruby applies by default.
     // Jekyll's regex uses \s, which also matches \r, so CRLF files parse.
-    R.get_or_init(|| Regex::new(r"(?sm)\A(---\s*?\n.*?\n?)^((---|\.\.\.)\s*?$\n?)").unwrap())
+    // Jekyll's exact regex. \s matches \r, so CRLF files parse; and the
+    // greedy \s* before $ swallows the blank line after the closing marker,
+    // which is visible whenever a template prints a page's raw content.
+    R.get_or_init(|| Regex::new(r"(?sm)\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)").unwrap())
 }
 
 /// True if the file starts with a front-matter marker, the same cheap check

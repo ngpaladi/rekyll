@@ -12,15 +12,18 @@ than against expectations.
 
 ```
 $ ./tests/harness/all.sh
-=== rekyll differential harness (7 fixtures) ===
-  [ OK ] 01-static
-  [ OK ] 02-page-layout
-  [ OK ] 03-posts
-  [ OK ] 04-includes
-  [ OK ] 05-sass
-  [ OK ] 06-highlight
-  [ OK ] 07-blog
-=== 7 passed, 0 failed ===
+=== rekyll differential harness (10 fixtures) ===
+  [ OK ] 01-static          static files, include/exclude rules
+  [ OK ] 02-page-layout     layouts, layout chains, CRLF front matter
+  [ OK ] 03-posts           permalinks, categories, tags, publishing
+  [ OK ] 04-includes        includes, collections, defaults, link tags
+  [ OK ] 05-sass            Sass, libsass :compact output
+  [ OK ] 06-highlight       the highlight tag, with and without linenos
+  [ OK ] 07-blog            a realistic blog: markdown, excerpts, a feed
+  [ OK ] 08-timezone        America/New_York, DST, unzoned dates
+  [ OK ] 09-blank-template  Jekyll's own `jekyll new --blank` output
+  [ OK ] 10-pages           page ordering and sequential content updates
+=== 10 passed, 0 failed ===
 === MARKDOWN IDENTICAL ===
 === FILTERS IDENTICAL ===
 ```
@@ -50,6 +53,9 @@ generated site:
 - **Includes and tags** — `include`, `include_relative`, `link`, `post_url`,
   `highlight`.
 - **Front-matter defaults** — `scope`/`values` with Jekyll's precedence rules.
+- **Timezones** — dates are resolved the way Psych and `Time#localtime` do, so
+  an unzoned `date: 2020-01-02 03:04:05` under `America/New_York` publishes at
+  `/2020/01/01/`, exactly as Jekyll does.
 - **Liquid filters** — Jekyll's own set plus overrides where Ruby differs.
   ~99 expressions diffed against Ruby Liquid 5.4.
 - **Markdown** — a Kramdown-compatible emitter (see below).
@@ -75,7 +81,13 @@ CommonMark. See `tests/markdown/divergences/`.
 `sourceMappingURL` comment. rekyll does not generate source maps; with
 `sass: {sourcemap: never}` the CSS is byte-identical.
 
-**Not implemented**: drafts (`_drafts`), pagination, themes, `where_exp` /
+**Gem themes are not supported**, and this is the gap you are most likely to
+hit first. A stock `jekyll new` site uses the `minima` theme, whose layouts and
+includes live inside a gem. rekyll will build it without erroring and without
+layouts, which is worse than failing. `jekyll new --blank` has no theme and is
+covered by fixture 09.
+
+**Also not implemented**: drafts (`_drafts`), pagination, `where_exp` /
 `group_by_exp` / `sample`, `site.related_posts`, CoffeeScript, TOML config,
 non-YAML data files, incremental builds, and `serve`/`watch`.
 
@@ -96,21 +108,31 @@ from the same source. `vendor/liquid-core` fixes this at the root.
 
 ## `vendor/liquid-core`
 
-Liquid itself is a dependency, not a rewrite — but four changes to
+Liquid itself is a dependency, not a rewrite — but seven changes to
 liquid-core 0.26.11 were needed, each wired in through `[patch.crates-io]`
 and marked with a `rekyll:` comment:
 
 1. **`Object` uses `IndexMap`** instead of `HashMap`, so hash iteration order
    is stable and matches Ruby's insertion order.
-2. **`TagTokenIter::raw_markup()`** exposes a tag's arguments as written.
+2. **`shift_remove` instead of `remove`**, since IndexMap's `remove` is
+   `swap_remove` and would reorder the map that change 1 exists to preserve.
+3. **`TagTokenIter::raw_markup()`** exposes a tag's arguments as written.
    Jekyll's tags do not follow Liquid's argument grammar — `{% include
    nav/menu.html a="b" %}` has no colons — so they must parse their own markup.
-3. **An `UnstructuredToken` grammar fallback**, tried only after every real
+4. **An `UnstructuredToken` grammar fallback**, tried only after every real
    production fails, so such tags tokenize at all.
-4. **Ruby float formatting and borrowed variable lookup.** Ruby's `Float#to_s`
-   keeps a decimal point, so `1.5 | plus: 1.5` renders `3.0`; and
-   `Runtime::get` deep-cloned a value that `find()` had already returned
-   borrowed, which made `{{ site.posts }}` cost O(posts) per access.
+5. **Unknown filters pass their input through.** Jekyll runs with
+   `strict_filters: false`, so `{{ x | some_plugin_filter }}` renders `x`.
+   Raising instead means a site written for plugins fails to build rather than
+   rendering without them.
+6. **Ruby float formatting.** `Float#to_s` keeps a decimal point, so
+   `1.5 | plus: 1.5` renders `3.0`, not `3`.
+7. **Borrowed variable lookup.** `Runtime::get` deep-cloned a value that
+   `find()` had already returned borrowed, which made `{{ site.posts }}` cost
+   O(posts) per access.
+
+Unknown *variables* needed no patch: `src/lax.rs` wraps the payload in a value
+tree whose lookups always succeed with nil, matching `strict_variables: false`.
 
 ## Performance
 
@@ -128,6 +150,7 @@ The harnesses are the specification.
 | script | what it diffs |
 |--------|---------------|
 | `tests/harness/all.sh` | everything below |
+| `tests/harness/diff.sh 08-timezone` | dates outside UTC — the most error-prone area |
 | `tests/harness/diff.sh [fixture…]` | full `_site` trees, `jekyll build` vs `rekyll build` |
 | `tests/harness/md_diff.sh` | the Markdown corpus against kramdown 2.4 + GFM |
 | `tests/harness/filters_diff.sh` | filter expressions against Ruby Liquid 5.4 |

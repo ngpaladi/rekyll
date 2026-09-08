@@ -130,7 +130,24 @@ impl Renderable for Include {
         let scope = StackFrame::new(runtime, &scope_vars);
 
         let key = if self.relative {
-            format!("__relative__/{}", self.args.file)
+            // `include_relative` resolves against the including file's own
+            // directory, which is the directory part of `page.path`.
+            let page_path = runtime
+                .try_get(&[
+                    liquid_core::model::Scalar::new("page"),
+                    liquid_core::model::Scalar::new("path"),
+                ])
+                .map(|v| v.to_kstr().into_owned().into_string())
+                .unwrap_or_default();
+            let dir = match page_path.rfind('/') {
+                Some(i) => &page_path[..i],
+                None => "",
+            };
+            if dir.is_empty() {
+                format!("__relative__/{}", self.args.file)
+            } else {
+                format!("__relative__/{}/{}", dir, self.args.file)
+            }
         } else {
             self.args.file.clone()
         };

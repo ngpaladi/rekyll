@@ -61,11 +61,39 @@ pub struct StaticFile {
     pub dir: String,
     pub name: String,
     pub source: PathBuf,
+    /// The owning collection, when the file sits inside one. Such files are
+    /// placed by the collection's URL template rather than by their path.
+    pub collection: Option<String>,
+    /// Path relative to the source root, used when a collection applies.
+    pub relative: String,
 }
 
 impl StaticFile {
     pub fn relative_path(&self) -> String {
+        if self.collection.is_some() {
+            return self.relative.clone();
+        }
         join_path(&self.dir, &self.name)
+    }
+
+    fn extname(&self) -> String {
+        match self.name.rfind('.') {
+            Some(i) if i > 0 => self.name[i..].to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// `StaticFile#basename`.
+    fn basename(&self) -> String {
+        let e = self.extname();
+        self.name[..self.name.len() - e.len()].trim_end_matches('.').to_string()
+    }
+
+    /// `StaticFile#cleaned_relative_path`.
+    fn cleaned_relative_path(&self, collection_dir: &str) -> String {
+        let e = self.extname();
+        let cleaned = self.relative[..self.relative.len() - e.len()].trim_end_matches('.');
+        cleaned.replacen(collection_dir, "", 1)
     }
 }
 
@@ -240,6 +268,8 @@ impl Site {
                 dir: dir.to_string(),
                 name: name.clone(),
                 source: base.join(&name),
+                collection: None,
+                relative: join_path(dir, &name).trim_start_matches('/').to_string(),
             });
         }
         Ok(())
@@ -318,11 +348,14 @@ impl Site {
                         docs.push(doc);
                     }
                 } else {
-                    // Files without front matter ride along as static files.
+                    // Files without front matter ride along as static files,
+                    // placed by the collection's URL template.
                     statics.push(StaticFile {
                         dir: format!("/{}", parent_of(&relative)),
                         name,
                         source: entry.path().to_path_buf(),
+                        collection: Some(label.clone()),
+                        relative: relative.clone(),
                     });
                 }
             }
@@ -473,6 +506,31 @@ impl Site {
             path = PathBuf::from(format!("{s}{output_ext}"));
         }
         path
+    }
+
+    /// `StaticFile#url`: inside a collection the file is placed by the
+    /// collection's URL template, otherwise by its own path.
+    pub fn static_file_url(&self, file: &StaticFile) -> String {
+        let collection = match file.collection.as_ref().and_then(|l| self.collections.get(l)) {
+            Some(c) => c,
+            None => return format!("/{}", file.relative_path().trim_start_matches('/')),
+        };
+        let placeholders: Vec<(&str, Option<String>)> = vec![
+            ("collection", Some(collection.label.clone())),
+            ("path", Some(file.cleaned_relative_path(&collection.relative_directory()))),
+            ("output_ext", Some(String::new())),
+            ("name", Some(file.basename())),
+            ("title", Some(String::new())),
+        ];
+        let template = collection.url_template(&self.permalink_style());
+        let base = url::sanitize_url(&url::generate_url(&template, &placeholders));
+        format!("{}{}", base.trim_end_matches('/'), file.extname())
+    }
+
+    /// `StaticFile#destination`.
+    pub fn static_file_destination(&self, file: &StaticFile) -> PathBuf {
+        let u = self.static_file_url(file);
+        self.dest.join(url::unescape_path(&u).trim_start_matches('/'))
     }
 
     /// Every document that should be written, in `site.documents` order.

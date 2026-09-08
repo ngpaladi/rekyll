@@ -1,0 +1,9 @@
+---
+title: Root Index
+---
+<h1>Root</h1>
+<ul>{% for p in site.pages %}<li>{{ p.path }} | {{ p.name }} | {{ p.url }}</li>
+{% endfor %}</ul>
+<h2>Contents</h2>
+{% for p in site.pages %}<div data-path="{{ p.path }}">{{ p.content }}</div>
+{% endfor %}

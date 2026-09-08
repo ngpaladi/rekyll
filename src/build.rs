@@ -35,10 +35,14 @@ pub fn build(source: &Path, dest: &Path) -> Result<()> {
         }
     }
 
-    for page in &site.pages {
-        let output = renderer
+    for (i, page) in site.pages.iter().enumerate() {
+        let (content, output) = renderer
             .render_page(&site, page, &payload)
             .with_context(|| format!("rendering {}", page.relative_path()))?;
+        payload.update_page(
+            i,
+            &Rendered { content, output: output.clone(), excerpt: String::new() },
+        );
         rendered.push((site.page_destination(page), output));
     }
 
@@ -48,7 +52,7 @@ pub fn build(source: &Path, dest: &Path) -> Result<()> {
         write_file(&path, output.as_bytes())?;
     }
     for file in &site.static_files {
-        let target = site.dest.join(file.relative_path());
+        let target = site.static_file_destination(file);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }

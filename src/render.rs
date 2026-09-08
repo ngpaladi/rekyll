@@ -47,6 +47,9 @@ pub struct Payload {
     /// are indexed once and updates go straight to them; searching the tree per
     /// update made a large site quadratic.
     doc_paths: HashMap<String, Vec<Vec<Step>>>,
+    /// Where each page's object sits, indexed by its position in `site.pages`.
+    /// Pages are patched as they render for the same reason documents are.
+    page_paths: Vec<Vec<Vec<Step>>>,
 }
 
 /// One step along a path into the drop.
@@ -69,10 +72,41 @@ impl Payload {
         let mut doc_paths = HashMap::new();
         index_documents(&site_value, &mut Vec::new(), &mut doc_paths);
 
+        // `site.pages` and `site.html_pages` hold the same objects; the latter
+        // is a filtered subset, so its positions are derived the same way the
+        // drop builds it.
+        let mut page_paths: Vec<Vec<Vec<Step>>> = Vec::with_capacity(site.pages.len());
+        let mut html_index = 0usize;
+        for (i, page) in site.pages.iter().enumerate() {
+            let mut locations = vec![vec![Step::Key("pages".into()), Step::Index(i)]];
+            if is_html_page(site, page) {
+                locations.push(vec![Step::Key("html_pages".into()), Step::Index(html_index)]);
+                html_index += 1;
+            }
+            page_paths.push(locations);
+        }
+
         Payload {
             site: std::sync::Arc::new(site_value),
             jekyll: LaxValue::Object(jekyll),
             doc_paths,
+            page_paths,
+        }
+    }
+
+    /// Reflect a finished page, so a page rendered later sees its converted
+    /// content just as Jekyll's live drop would.
+    pub fn update_page(&mut self, index: usize, rendered: &Rendered) {
+        let paths = match self.page_paths.get(index) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let site = std::sync::Arc::make_mut(&mut self.site);
+        for path in &paths {
+            if let Some(LaxValue::Object(obj)) = follow_mut(site, path) {
+                obj.insert("content", LaxValue::str(rendered.content.clone()));
+                obj.insert("output", LaxValue::str(rendered.output.clone()));
+            }
         }
     }
 
@@ -209,7 +243,12 @@ impl Renderer {
     }
 
     /// `Renderer#run` for a page: Liquid, then the converter, then layouts.
-    pub fn render_page(&self, site: &Site, page: &Page, payload: &Payload) -> Result<String> {
+    pub fn render_page(
+        &self,
+        site: &Site,
+        page: &Page,
+        payload: &Payload,
+    ) -> Result<(String, String)> {
         let mut payload = payload.root();
         payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&page_to_liquid(site, page))));
         payload.insert("paginator", LaxValue::Nil);
@@ -237,10 +276,13 @@ impl Renderer {
         output = convert(site, page, &output)
             .with_context(|| format!("converting {}", page.relative_path()))?;
 
+        // `page.content` becomes the converted text before layouts run.
+        let converted = output.clone();
+
         if place_in_layout(&page.data, &page.ext) {
             output = self.place_in_layouts(site, page, output, &mut payload)?;
         }
-        Ok(output)
+        Ok((converted, output))
     }
 
     /// `Renderer#run` for a collection document.
@@ -504,10 +546,7 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     let html_pages: Vec<LaxValue> = site
         .pages
         .iter()
-        .filter(|p| {
-            let ext = site.output_ext(p);
-            matches!(ext.as_str(), ".html" | ".xhtml" | ".htm") || site.page_url(p).ends_with('/')
-        })
+        .filter(|p| is_html_page(site, p))
         .map(|p| LaxValue::Object(LaxObject::from_value_object(&page_to_liquid(site, p))))
         .collect();
 
@@ -516,7 +555,7 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
         .iter()
         .map(|f| {
             let mut o = LaxObject::new();
-            o.insert("path", LaxValue::str(format!("/{}", f.relative_path())));
+            o.insert("path", LaxValue::str(format!("/{}", f.relative_path().trim_start_matches('/'))));
             o.insert("name", LaxValue::str(f.name.clone()));
             o.insert("basename", LaxValue::str(basename_no_ext(&f.name)));
             o.insert("extname", LaxValue::str(extname(&f.name)));
@@ -598,6 +637,12 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     drop.insert("categories", LaxValue::Object(group_by(site, "categories", &get)));
     drop.insert("related_posts", LaxValue::Nil);
     drop
+}
+
+/// `SiteDrop#html_pages`: HTML output, or a URL ending in a slash.
+fn is_html_page(site: &Site, page: &Page) -> bool {
+    let ext = site.output_ext(page);
+    matches!(ext.as_str(), ".html" | ".xhtml" | ".htm") || site.page_url(page).ends_with('/')
 }
 
 fn extname(name: &str) -> String {
@@ -684,8 +729,7 @@ fn build_url_index(site: &Site) -> crate::tags::UrlIndex {
         index.insert(doc.relative_path.clone(), site.doc_url(doc));
     }
     for file in &site.static_files {
-        let rel = file.relative_path();
-        index.insert(rel.clone(), format!("/{}", rel.trim_start_matches('/')));
+        index.insert(file.relative_path(), site.static_file_url(file));
     }
     index
 }
