@@ -1,0 +1,4 @@
+title: Timezone Fixture
+timezone: America/New_York
+time: 2030-01-01 00:00:00 +0000
+future: false

@@ -1,0 +1,6 @@
+---
+---
+<p>site.time={{ site.time }}</p>
+<p>site.time fmt={{ site.time | date: "%Y-%m-%d %H:%M:%S %Z %z" }}</p>
+<ul>{% for post in site.posts %}<li>{{ post.url }} | {{ post.date }} | {{ post.date | date: "%s" }}</li>
+{% endfor %}</ul>

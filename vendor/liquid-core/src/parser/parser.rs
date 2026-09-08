@@ -215,14 +215,14 @@ fn parse_filter(filter: Pair, options: &Language) -> Result<Box<dyn Filter>> {
         keyword: Box::new(keyword_args.into_iter()),
     };
 
-    let f = options.filters.get(name).ok_or_else(|| {
-        let mut available: Vec<_> = options.filters.plugin_names().collect();
-        available.sort_unstable();
-        let available = itertools::join(available, ", ");
-        Error::with_msg("Unknown filter")
-            .context("requested filter", name.to_owned())
-            .context("available filters", available)
-    })?;
+    // rekyll: Jekyll runs Liquid with strict_filters disabled, where an
+    // unknown filter returns its input unchanged rather than raising. Sites
+    // written for plugins rekyll does not load (jekyll-seo-tag and friends)
+    // would otherwise fail to build instead of rendering without them.
+    let f = match options.filters.get(name) {
+        Some(f) => f,
+        None => return Ok(Box::new(PassthroughFilter)),
+    };
 
     let f = f
         .parse(args)
@@ -231,6 +231,27 @@ fn parse_filter(filter: Pair, options: &Language) -> Result<Box<dyn Filter>> {
         .value_with(|| filter_str.to_string().into())?;
 
     Ok(f)
+}
+
+/// The filter an unknown name resolves to when strict filters are off: it
+/// returns its input, matching Ruby Liquid's `StrainerTemplate#invoke`.
+#[derive(Debug)]
+struct PassthroughFilter;
+
+impl std::fmt::Display for PassthroughFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("unknown filter")
+    }
+}
+
+impl crate::parser::Filter for PassthroughFilter {
+    fn evaluate(
+        &self,
+        input: &dyn crate::model::ValueView,
+        _runtime: &dyn crate::runtime::Runtime,
+    ) -> Result<crate::model::Value> {
+        Ok(input.to_value())
+    }
 }
 
 /// Parses a `FilterChain` from a `Pair` with a filter chain.

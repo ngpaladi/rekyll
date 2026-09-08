@@ -1,0 +1,11 @@
+<article>
+<p>title={{ page.title }}</p>
+<p>url={{ page.url }}</p>
+<p>date={{ page.date }}</p>
+<p>zone={{ page.date | date: "%Z %z" }}</p>
+<p>ymd={{ page.date | date: "%Y-%m-%d %H:%M:%S" }}</p>
+<p>xml={{ page.date | date_to_xmlschema }}</p>
+<p>rfc={{ page.date | date_to_rfc822 }}</p>
+<p>long={{ page.date | date_to_long_string }}</p>
+{{ content }}
+</article>

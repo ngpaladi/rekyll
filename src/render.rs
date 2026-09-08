@@ -493,7 +493,7 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     // `SiteDrop#config` deliberately returns nil.
     drop.insert("config", LaxValue::Nil);
     drop.insert("data", LaxValue::Object(LaxObject::from_value_object(&site.data)));
-    drop.insert("time", LaxValue::str(site_time(site)));
+    drop.insert("time", LaxValue::str(site.time.to_s()));
 
     let pages: Vec<LaxValue> = site
         .pages
@@ -598,16 +598,6 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     drop.insert("categories", LaxValue::Object(group_by(site, "categories", &get)));
     drop.insert("related_posts", LaxValue::Nil);
     drop
-}
-
-/// `Site#time`: the pinned `time:` from configuration, else now.
-fn site_time(site: &Site) -> String {
-    if let Some(t) = site.config.get("time") {
-        if t.truthy() {
-            return t.to_string();
-        }
-    }
-    chrono::Local::now().format("%Y-%m-%d %H:%M:%S %z").to_string()
 }
 
 fn extname(name: &str) -> String {

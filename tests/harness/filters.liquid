@@ -98,3 +98,5 @@
 {{ "2020-01-03 00:00:00 +0000" | date_to_string: "ordinal" }}
 {{ "2020-01-11 00:00:00 +0000" | date_to_string: "ordinal" }}
 {{ "2020-01-22 00:00:00 +0000" | date_to_string: "ordinal" }}
+{{ "x" | nonexistent_filter }}
+{{ "y" | some_plugin_filter: 1, "a" }}
