@@ -30,6 +30,12 @@ enum Command {
         /// Serve an existing build instead of rebuilding first.
         #[arg(long)]
         skip_initial_build: bool,
+        /// Do not rebuild when a source file changes.
+        #[arg(long)]
+        no_watch: bool,
+        /// Do not inject the reload script into served HTML.
+        #[arg(long)]
+        no_livereload: bool,
     },
 }
 
@@ -54,14 +60,25 @@ fn main() -> Result<()> {
         Command::Build { paths } => rekyll::build::build(&paths.source, &paths.destination()),
 
         #[cfg(feature = "serve")]
-        Command::Serve { paths, host, port, skip_initial_build } => {
+        Command::Serve { paths, host, port, skip_initial_build, no_watch, no_livereload } => {
             let dest = paths.destination();
             if !skip_initial_build {
                 rekyll::build::build(&paths.source, &dest)?;
             }
             // The baseurl decides what prefix the served URLs carry.
             let site = rekyll::site::Site::new(&paths.source, &dest)?;
-            rekyll::serve::serve(&dest, &host, port, site.config.str("baseurl"))
+            let watch = (!no_watch).then_some(rekyll::serve::Watch {
+                source: &paths.source,
+                destination: &dest,
+            });
+            rekyll::serve::serve(rekyll::serve::Options {
+                root: &dest,
+                host: &host,
+                port,
+                baseurl: site.config.str("baseurl"),
+                watch,
+                livereload: !no_livereload,
+            })
         }
     }
 }

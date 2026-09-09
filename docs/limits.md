@@ -19,25 +19,16 @@ site. A `jekyll new --blank` site has no theme and works fine.
 
 **Pagination.** No `paginate`, no `paginator`.
 
-**Watch and livereload.** `rekyll serve` will serve a build but it never
-rebuilds. Re-run it after you edit something.
-
 **Incremental builds.** Every build is a full build.
 
 **TOML config**, data files that aren't YAML (`.csv`, `.json`, `.tsv`),
 CoffeeScript, and `site.related_posts`.
 
-## Filters Jekyll Has That rekyll Doesn't
+## sample
 
-`where_exp`, `group_by_exp`, `find_exp`, `sample`, `sassify`, `scssify`
-
-These pass their input straight through and print a build warning. The warning
-matters, because without it a missing filter looks like a wrong answer instead
-of a missing feature: `{% raw %}{{ site.posts | where_exp: "p", "..." }}{% endraw %}`
-would quietly hand you every post.
-
-`sample` isn't reproducible in Jekyll either, since it calls Ruby's unseeded
-`Array#sample`.
+`sample` works, but it can't match Jekyll, because Jekyll's calls Ruby's
+unseeded `Array#sample` and picks a different element every run. Neither one is
+reproducible, so don't put it anywhere you're diffing output.
 
 ## Output That Differs On Purpose
 

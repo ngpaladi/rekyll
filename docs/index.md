@@ -53,10 +53,18 @@ rekyll serve -s docs -d docs/_site
 ```
 
 That puts it on `http://127.0.0.1:4000`, same default as Jekyll, and `-H` and
-`-P` change the host and port. Add `--skip-initial-build` if you already have a
-`_site` and just want to serve it. It's a preview server, so it won't watch for
-changes and you shouldn't point it at a network. If you don't want it at all,
-build with `--no-default-features` and you get a build-only binary.
+`-P` change the host and port. It watches your source folder while it runs, so
+saving a file rebuilds the site and the page in your browser reloads itself.
+
+If you'd rather it didn't, `--no-watch` stops the rebuilding and
+`--no-livereload` stops the page reloading. `--skip-initial-build` serves a
+`_site` you already have without building first. Don't point it at a network,
+it's only meant for looking at your own site. If you don't want the server in
+the binary at all, build with `--no-default-features`.
+
+The reload works by appending a small script to the HTML the server sends,
+which polls a build counter twice a second. Your built files aren't touched, so
+they still match Jekyll's byte for byte.
 
 ## Speed
 

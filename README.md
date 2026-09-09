@@ -52,8 +52,11 @@ rekyll serve -s docs -d docs/_site          # http://127.0.0.1:4000
 ```
 
 `serve` is a default Cargo feature that adds no dependencies; build with
-`--no-default-features` for a build-only binary. It is a preview server: it
-does not watch or rebuild, and it is not meant to face a network.
+`--no-default-features` for a build-only binary. It watches the source and
+rebuilds, and the served HTML carries a small polling script so the browser
+reloads itself; `--no-watch` and `--no-livereload` turn those off. The script
+is added to the response, never to the file on disk, so builds still compare
+byte-for-byte against Jekyll. It is not meant to face a network.
 
 ## What matches Jekyll exactly
 
@@ -116,9 +119,9 @@ includes live inside a gem. rekyll will build it without erroring and without
 layouts, which is worse than failing. `jekyll new --blank` has no theme and is
 covered by fixture 09.
 
-**Also not implemented**: drafts (`_drafts`), pagination, `where_exp` /
-`group_by_exp` / `sample`, `site.related_posts`, CoffeeScript, TOML config,
-non-YAML data files, incremental builds, and watch/livereload.
+**Also not implemented**: drafts (`_drafts`), pagination, `site.related_posts`,
+CoffeeScript, TOML config, non-YAML data files, and incremental builds.
+`sample` works but cannot match Jekyll, whose own is unseeded.
 
 ## Determinism
 

@@ -70,7 +70,13 @@ Jekyll's own filters:
 `normalize_whitespace`, `markdownify`, `smartify`, `date_to_string`,
 `date_to_long_string`, `date_to_xmlschema`, `date_to_rfc822`, `relative_url`,
 `absolute_url`, `strip_index`, `push`, `pop`, `shift`, `unshift`, `where`,
-`group_by`, `find`
+`group_by`, `group_by_exp`, `find`, `find_exp`, `where_exp`, `sample`,
+`sassify`, `scssify`
+
+The three `_exp` filters take an expression and evaluate it once per item with
+your variable bound to that item, the same as Jekyll, so
+`{% raw %}{{ site.posts | where_exp: "p", "p.tags contains 'rust'" }}{% endraw %}`
+does what you'd expect. You can use filters inside the expression too.
 
 Standard Liquid filters that had to be overridden because Ruby does something
 different:
