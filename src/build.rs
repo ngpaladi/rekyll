@@ -49,24 +49,23 @@ pub fn build(source: &Path, dest: &Path) -> Result<()> {
     clean_destination(&site)?;
 
     for (path, output) in rendered {
-        write_file(&path, output.as_bytes())?;
+        make_parent(&path)?;
+        std::fs::write(&path, output).with_context(|| format!("writing {}", path.display()))?;
     }
     for file in &site.static_files {
         let target = site.static_file_destination(file);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        make_parent(&target)?;
         std::fs::copy(&file.source, &target)
             .with_context(|| format!("copying {}", file.source.display()))?;
     }
     Ok(())
 }
 
-fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+fn make_parent(path: &Path) -> Result<()> {
+    match path.parent() {
+        Some(parent) => Ok(std::fs::create_dir_all(parent)?),
+        None => Ok(()),
     }
-    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
 }
 
 /// `Jekyll::Cleaner`: remove everything in the destination except `keep_files`.

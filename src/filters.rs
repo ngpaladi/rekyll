@@ -232,57 +232,41 @@ fn is_ident(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// The two string arguments `where_exp`, `find_exp` and `group_by_exp` take.
-fn expr_args(args: &[Value]) -> Option<(String, String)> {
-    Some((arg_str(args, 0)?, arg_str(args, 1)?))
+/// The `variable, expression` arguments of the `_exp` filters, evaluated
+/// against each input item: `(item, rendered expression)` pairs.
+fn exp_pairs(
+    input: &dyn ValueView,
+    args: &[Value],
+    c: &FilterCtx,
+    r: &dyn Runtime,
+    condition: bool,
+) -> Option<Vec<(Value, String)>> {
+    let (variable, expression) = (arg_str(args, 0)?, arg_str(args, 1)?);
+    let items = array_of(input);
+    let results = eval_expr(c, r, &variable, &expression, &items, condition)?;
+    Some(items.into_iter().zip(results).collect())
 }
 
 fn f_where_exp(input: &dyn ValueView, args: &[Value], c: &FilterCtx, r: &dyn Runtime) -> Result<Value> {
-    let Some((variable, expression)) = expr_args(args) else {
-        return Ok(input.to_value());
-    };
-    let items = array_of(input);
-    let Some(results) = eval_expr(c, r, &variable, &expression, &items, true)
-    else {
-        return Ok(input.to_value());
-    };
-    let kept = items
-        .into_iter()
-        .zip(results)
-        .filter(|(_, r)| !r.is_empty())
-        .map(|(item, _)| item)
-        .collect();
-    Ok(Value::Array(kept))
+    Ok(match exp_pairs(input, args, c, r, true) {
+        Some(pairs) => Value::Array(pairs.into_iter().filter(|(_, r)| !r.is_empty()).map(|(i, _)| i).collect()),
+        None => input.to_value(),
+    })
 }
 
 fn f_find_exp(input: &dyn ValueView, args: &[Value], c: &FilterCtx, r: &dyn Runtime) -> Result<Value> {
-    let Some((variable, expression)) = expr_args(args) else {
-        return Ok(input.to_value());
-    };
-    let items = array_of(input);
-    let Some(results) = eval_expr(c, r, &variable, &expression, &items, true)
-    else {
-        return Ok(input.to_value());
-    };
-    Ok(items
-        .into_iter()
-        .zip(results)
-        .find(|(_, r)| !r.is_empty())
-        .map(|(item, _)| item)
-        .unwrap_or(Value::Nil))
+    Ok(match exp_pairs(input, args, c, r, true) {
+        Some(pairs) => pairs.into_iter().find(|(_, r)| !r.is_empty()).map(|(i, _)| i).unwrap_or(Value::Nil),
+        None => input.to_value(),
+    })
 }
 
 /// `group_by_exp`: group by the rendered expression, in first-seen order.
 fn f_group_by_exp(input: &dyn ValueView, args: &[Value], c: &FilterCtx, r: &dyn Runtime) -> Result<Value> {
-    let Some((variable, expression)) = expr_args(args) else {
-        return Ok(input.to_value());
-    };
-    let items = array_of(input);
-    let Some(names) = eval_expr(c, r, &variable, &expression, &items, false)
-    else {
-        return Ok(input.to_value());
-    };
-    Ok(grouped_array(items.into_iter().zip(names)))
+    Ok(match exp_pairs(input, args, c, r, false) {
+        Some(pairs) => grouped_array(pairs.into_iter()),
+        None => input.to_value(),
+    })
 }
 
 /// `sample`: Ruby's `Array#sample`, which is unseeded and therefore not
@@ -358,11 +342,6 @@ fn array_of(input: &dyn ValueView) -> Vec<Value> {
     }
 }
 
-/// Ruby renders floats with a decimal point, so `3.0` never prints as `3`.
-fn number_to_value(x: f64) -> Value {
-    Value::scalar(x)
-}
-
 fn to_rvalue(v: &dyn ValueView) -> RValue {
     from_liquid(&v.to_value())
 }
@@ -375,15 +354,7 @@ fn f_slugify(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Run
 }
 
 fn f_xml_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    // Ruby's CGI.escapeHTML.
-    Ok(Value::scalar(
-        s(input)
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#39;"),
-    ))
+    Ok(Value::scalar(escape_html_ruby(&s(input))))
 }
 
 /// `escape_once` leaves existing entity references alone.
@@ -401,6 +372,7 @@ fn f_escape_once(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn R
     Ok(Value::scalar(out))
 }
 
+/// Ruby's `CGI.escapeHTML`: note `&#39;` where liquid-rust writes `&#x27;`.
 fn escape_html_ruby(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -544,21 +516,10 @@ fn f_to_integer(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Ru
     Ok(Value::scalar(n))
 }
 
+/// Ruby's `String#to_f`: the leading number, ignoring whatever follows.
 fn leading_number(s: &str) -> Option<f64> {
-    let t = s.trim_start();
-    let mut end = 0;
-    let mut seen_dot = false;
-    for (i, c) in t.char_indices() {
-        if c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+')) {
-            end = i + c.len_utf8();
-        } else if c == '.' && !seen_dot {
-            seen_dot = true;
-            end = i + c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    t[..end].parse::<f64>().ok()
+    let re = regex::Regex::new(r"^\s*[-+]?\d*\.?\d*").unwrap();
+    re.find(s).and_then(|m| m.as_str().trim().parse::<f64>().ok())
 }
 
 /// `inspect`: Ruby's `Object#inspect`, then HTML-escaped by Jekyll.
@@ -606,17 +567,14 @@ fn to_time(input: &dyn ValueView, c: &FilterCtx) -> Option<RTime> {
 }
 
 fn f_date(input: &dyn ValueView, args: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    let format = match arg_str(args, 0) {
-        Some(f) if !f.is_empty() => f,
+    match arg_str(args, 0) {
+        Some(f) if !f.is_empty() => date_with(input, c, &f),
         // Liquid returns the input untouched when no format is given.
-        _ => return Ok(input.to_value()),
-    };
-    match to_time(input, c) {
-        Some(t) => Ok(Value::scalar(t.format(&format))),
-        None => Ok(input.to_value()),
+        _ => Ok(input.to_value()),
     }
 }
 
+/// Format the input as a time, or hand it back if it is not one.
 fn date_with(input: &dyn ValueView, c: &FilterCtx, fmt: &str) -> Result<Value> {
     match to_time(input, c) {
         Some(t) => Ok(Value::scalar(t.format(fmt))),
@@ -673,25 +631,21 @@ fn f_date_to_rfc822(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn
 
 // -- URLs -------------------------------------------------------------------
 
+// The URL filters pass nil through untouched.
 fn f_relative_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    if input.is_nil() {
-        return Ok(Value::Nil);
-    }
-    Ok(Value::scalar(crate::url::relative_url(&s(input), &c.baseurl)))
+    Ok(unless_nil(input, |s| crate::url::relative_url(s, &c.baseurl)))
 }
 
 fn f_absolute_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    if input.is_nil() {
-        return Ok(Value::Nil);
-    }
-    Ok(Value::scalar(crate::url::absolute_url(&s(input), &c.url, &c.baseurl)))
+    Ok(unless_nil(input, |s| crate::url::absolute_url(s, &c.url, &c.baseurl)))
 }
 
 fn f_strip_index(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    if input.is_nil() {
-        return Ok(Value::Nil);
-    }
-    Ok(Value::scalar(crate::url::strip_index(&s(input))))
+    Ok(unless_nil(input, crate::url::strip_index))
+}
+
+fn unless_nil(input: &dyn ValueView, f: impl Fn(&str) -> String) -> Value {
+    if input.is_nil() { Value::Nil } else { Value::scalar(f(&s(input))) }
 }
 
 // -- arrays -----------------------------------------------------------------
@@ -748,8 +702,7 @@ fn f_find(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtim
 }
 
 fn property_matches(item: &Value, key: &str, want: Option<&Value>) -> bool {
-    let got = item.as_object().and_then(|o| o.get(key)).map(|v| v.to_value());
-    match (got, want) {
+    match (property(item, key), want) {
         (Some(g), Some(w)) => {
             // Jekyll compares the rendered forms, so 1 matches "1".
             g.to_kstr() == w.to_kstr()
@@ -765,33 +718,16 @@ fn property_matches(item: &Value, key: &str, want: Option<&Value>) -> bool {
 /// `{"name" => value, "items" => [...], "size" => n}`.
 fn f_group_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let key = arg_str(args, 0).unwrap_or_default();
-    let mut order: Vec<String> = Vec::new();
-    let mut groups: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
+    let pairs = array_of(input).into_iter().map(|item| {
+        let name = property(&item, &key).map(|v| v.to_kstr().into_owned().into_string()).unwrap_or_default();
+        (item, name)
+    });
+    Ok(grouped_array(pairs))
+}
 
-    for item in array_of(input) {
-        let name = item
-            .as_object()
-            .and_then(|o| o.get(&key))
-            .map(|v| v.to_kstr().into_owned().into_string())
-            .unwrap_or_default();
-        if !groups.contains_key(&name) {
-            order.push(name.clone());
-        }
-        groups.entry(name).or_default().push(item);
-    }
-
-    let out: Vec<Value> = order
-        .into_iter()
-        .map(|name| {
-            let items = groups.remove(&name).unwrap_or_default();
-            let mut o = liquid_core::model::Object::new();
-            o.insert("name".into(), Value::scalar(name));
-            o.insert("size".into(), Value::scalar(items.len() as i64));
-            o.insert("items".into(), Value::Array(items));
-            Value::Object(o)
-        })
-        .collect();
-    Ok(Value::Array(out))
+/// `item[key]` for an object item, as Jekyll's `item_property` reads it.
+fn property(item: &Value, key: &str) -> Option<Value> {
+    item.as_object().and_then(|o| o.get(key)).map(|v| v.to_value())
 }
 
 /// `sort`: by a property when given one, else by rendered value. Ruby's sort
@@ -802,9 +738,7 @@ fn f_sort(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtim
     items.sort_by(|a, b| match &key {
         None => compare_values(a, b),
         Some(k) => {
-            let av = a.as_object().and_then(|o| o.get(k)).map(|v| v.to_value());
-            let bv = b.as_object().and_then(|o| o.get(k)).map(|v| v.to_value());
-            match (av, bv) {
+            match (property(a, k), property(b, k)) {
                 (None, None) => std::cmp::Ordering::Equal,
                 (None, Some(_)) => std::cmp::Ordering::Less,
                 (Some(_), None) => std::cmp::Ordering::Greater,
@@ -831,7 +765,7 @@ fn f_map(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime
     let out: Vec<Value> = array_of(input)
         .into_iter()
         .map(|item| match item.as_object() {
-            Some(o) => o.get(&key).map(|v| v.to_value()).unwrap_or(Value::Nil),
+            Some(_) => property(&item, &key).unwrap_or(Value::Nil),
             None => match item.as_scalar() {
                 // "abc"["b"] is "b"; anything not present is nil.
                 Some(sc) if sc.to_kstr().contains(&key) && !key.is_empty() => {
@@ -885,7 +819,7 @@ fn f_divided_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn 
     if both_int {
         Ok(Value::scalar((x as i64).div_euclid(y as i64)))
     } else {
-        Ok(number_to_value(x / y))
+        Ok(Value::scalar(x / y))
     }
 }
 
@@ -902,18 +836,13 @@ fn numeric(v: &RValue) -> f64 {
 /// `Jekyll::Filters::GroupingFilters#grouped_array`: one entry per distinct
 /// name, in first-seen order, each `{"name", "items", "size"}`.
 fn grouped_array(pairs: impl Iterator<Item = (Value, String)>) -> Value {
-    let mut order: Vec<String> = Vec::new();
-    let mut groups: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
+    let mut groups: indexmap::IndexMap<String, Vec<Value>> = indexmap::IndexMap::new();
     for (item, name) in pairs {
-        if !groups.contains_key(&name) {
-            order.push(name.clone());
-        }
         groups.entry(name).or_default().push(item);
     }
-    let out: Vec<Value> = order
+    let out: Vec<Value> = groups
         .into_iter()
-        .map(|name| {
-            let items = groups.remove(&name).unwrap_or_default();
+        .map(|(name, items)| {
             let mut o = liquid_core::model::Object::new();
             o.insert("name".into(), Value::scalar(name));
             o.insert("size".into(), Value::scalar(items.len() as i64));

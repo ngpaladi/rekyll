@@ -87,24 +87,17 @@ impl LaxValue {
     }
 }
 
-struct Str(String);
-impl fmt::Display for Str {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 impl ValueView for LaxValue {
     fn as_debug(&self) -> &dyn fmt::Debug {
         self
     }
 
     fn render(&self) -> DisplayCow<'_> {
-        DisplayCow::Owned(Box::new(Str(self.to_kstr().into_owned().into_string())))
+        DisplayCow::Owned(Box::new(self.to_kstr().into_owned().into_string()))
     }
 
     fn source(&self) -> DisplayCow<'_> {
-        DisplayCow::Owned(Box::new(Str(self.to_value().source().to_string())))
+        DisplayCow::Owned(Box::new(self.to_value().source().to_string()))
     }
 
     fn type_name(&self) -> &'static str {
@@ -204,10 +197,10 @@ impl ValueView for LaxObject {
         self
     }
     fn render(&self) -> DisplayCow<'_> {
-        DisplayCow::Owned(Box::new(Str(self.to_value().render().to_string())))
+        DisplayCow::Owned(Box::new(self.to_value().render().to_string()))
     }
     fn source(&self) -> DisplayCow<'_> {
-        DisplayCow::Owned(Box::new(Str(self.to_value().source().to_string())))
+        DisplayCow::Owned(Box::new(self.to_value().source().to_string()))
     }
     fn type_name(&self) -> &'static str {
         "object"

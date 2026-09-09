@@ -67,26 +67,20 @@ impl Defaults {
         defaults
     }
 
+    /// `applies_type?` and `applies_path?`: an untyped scope matches every
+    /// type; an empty path matches everything, a glob is matched, and a plain
+    /// path is a prefix.
     fn applies(&self, set: &Set, path: &str, doc_type: &str) -> bool {
-        self.applies_type(set, doc_type) && self.applies_path(set, path)
-    }
-
-    fn applies_type(&self, set: &Set, doc_type: &str) -> bool {
-        match &set.doc_type {
-            None => true,
-            Some(t) => t == doc_type,
-        }
-    }
-
-    fn applies_path(&self, set: &Set, path: &str) -> bool {
-        if set.path.is_empty() {
-            return true;
+        if set.doc_type.as_deref().is_some_and(|t| t != doc_type) {
+            return false;
         }
         let sanitized = sanitize_path(path);
-        if set.path.contains('*') {
-            return glob_match(&set.path, &sanitized);
-        }
-        sanitized.starts_with(&self.strip_collections_dir(&sanitize_path(&set.path)))
+        set.path.is_empty()
+            || if set.path.contains('*') {
+                glob_match(&set.path, &sanitized)
+            } else {
+                sanitized.starts_with(&self.strip_collections_dir(&sanitize_path(&set.path)))
+            }
     }
 
     fn strip_collections_dir(&self, path: &str) -> String {
