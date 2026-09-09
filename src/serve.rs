@@ -1,14 +1,12 @@
 //! A static file server for previewing a build, with optional watch and
 //! live reload.
 //!
-//! Deliberately dependency-free: enough HTTP/1.1 to serve a built site to a
-//! browser on localhost, a poll-based watcher, and a generation counter the
-//! page checks to know when to reload. It is a preview server, not a web
-//! server.
+//! `tiny_http` does the HTTP, `mime_guess` the content types; what is left is
+//! mapping URLs onto the build directory, a poll-based watcher, and a
+//! generation counter the page checks to know when to reload. It is a preview
+//! server, not a web server.
 
-use anyhow::{Context, Result};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use anyhow::{anyhow, Result};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -42,8 +40,8 @@ pub struct Watch<'a> {
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub fn serve(opts: Options) -> Result<()> {
-    let listener = TcpListener::bind((opts.host, opts.port))
-        .with_context(|| format!("binding {}:{}", opts.host, opts.port))?;
+    let server = tiny_http::Server::http((opts.host, opts.port))
+        .map_err(|e| anyhow!("binding {}:{}: {e}", opts.host, opts.port))?;
 
     let base = opts.baseurl.trim_end_matches('/').to_string();
     let root = opts.root.to_path_buf();
@@ -60,19 +58,14 @@ pub fn serve(opts: Options) -> Result<()> {
     println!("  Server running... press ctrl-c to stop.");
 
     let base = Arc::new(base);
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let root = root.clone();
-                let base = base.clone();
-                // One thread per connection keeps this simple; a preview
-                // server never sees meaningful concurrency.
-                std::thread::spawn(move || {
-                    let _ = handle(stream, &root, &base, livereload);
-                });
-            }
-            Err(e) => eprintln!("  connection error: {e}"),
-        }
+    for request in server.incoming_requests() {
+        let (root, base) = (root.clone(), base.clone());
+        // One thread per request keeps this simple; a preview server never
+        // sees meaningful concurrency.
+        std::thread::spawn(move || {
+            let resp = response(&request, &root, &base, livereload);
+            let _ = request.respond(resp);
+        });
     }
     Ok(())
 }
@@ -90,7 +83,6 @@ fn spawn_watcher(source: PathBuf, destination: PathBuf) {
             if current == previous {
                 continue;
             }
-            previous = current;
             match crate::build::build(&source, &destination) {
                 Ok(()) => {
                     GENERATION.fetch_add(1, Ordering::SeqCst);
@@ -143,30 +135,20 @@ fn now_hms() -> String {
     format!("{h:02}:{m:02}:{s:02} UTC")
 }
 
-fn handle(mut stream: TcpStream, root: &Path, baseurl: &str, livereload: bool) -> Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line)? == 0 {
-        return Ok(());
-    }
-
-    // Drain the headers so the client sees a clean response.
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
-            break;
-        }
-    }
-
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let target = parts.next().unwrap_or("/");
-    if method != "GET" && method != "HEAD" {
-        return respond(&mut stream, 405, "text/plain; charset=utf-8", b"Method Not Allowed", false);
+/// Build the response for one request: a file under `root`, the generation
+/// counter, or a 404. `tiny_http` drops the body itself for HEAD.
+fn response(req: &tiny_http::Request, root: &Path, baseurl: &str, livereload: bool) -> Response {
+    let text = |status: u16, body: String| {
+        tiny_http::Response::from_data(body.into_bytes())
+            .with_status_code(status)
+            .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+    };
+    if !matches!(req.method(), tiny_http::Method::Get | tiny_http::Method::Head) {
+        return text(405, "Method Not Allowed".into());
     }
 
     // Strip the query string, then the configured baseurl.
-    let path = target.split(['?', '#']).next().unwrap_or("/");
+    let path = req.url().split(['?', '#']).next().unwrap_or("/");
     let path = match path.strip_prefix(baseurl) {
         Some(rest) if !baseurl.is_empty() => rest,
         _ => path,
@@ -175,23 +157,31 @@ fn handle(mut stream: TcpStream, root: &Path, baseurl: &str, livereload: bool) -
 
     // The page polls this for the build generation.
     if decoded == LIVE_PATH {
-        let body = GENERATION.load(Ordering::SeqCst).to_string();
-        return respond(&mut stream, 200, "text/plain; charset=utf-8", body.as_bytes(), false);
+        return text(200, GENERATION.load(Ordering::SeqCst).to_string());
     }
-
     let Some(file) = resolve(root, &decoded) else {
-        let body = format!("404 Not Found\n\n{decoded}\n");
-        return respond(&mut stream, 404, "text/plain; charset=utf-8", body.as_bytes(), false);
+        return text(404, format!("404 Not Found\n\n{decoded}\n"));
+    };
+    let Ok(mut bytes) = std::fs::read(&file) else {
+        return text(500, format!("could not read {}", file.display()));
     };
 
-    let mut bytes = Vec::new();
-    std::fs::File::open(&file)?.read_to_end(&mut bytes)?;
-    let mime = mime_for(&file);
-    if livereload && mime.starts_with("text/html") {
+    let mime = mime_guess::from_path(&file).first_or_octet_stream();
+    let is_text = mime.type_() == "text" || matches!(mime.subtype().as_str(), "json" | "javascript" | "xml");
+    let content_type = if is_text { format!("{mime}; charset=utf-8") } else { mime.to_string() };
+    if livereload && mime == mime_guess::mime::TEXT_HTML {
         bytes = inject_reload_script(bytes);
     }
     println!("  GET {decoded} -> {} ({} bytes)", file.display(), bytes.len());
-    respond(&mut stream, 200, mime, &bytes, method == "HEAD")
+    tiny_http::Response::from_data(bytes)
+        .with_header(header("Content-Type", &content_type))
+        .with_header(header("Cache-Control", "no-store"))
+}
+
+type Response = tiny_http::Response<std::io::Cursor<Vec<u8>>>;
+
+fn header(name: &str, value: &str) -> tiny_http::Header {
+    tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("ascii header")
 }
 
 /// Map a URL path to a file inside `root`, refusing anything that escapes it.
@@ -216,60 +206,6 @@ fn resolve(root: &Path, url_path: &str) -> Option<PathBuf> {
     // Jekyll's server also answers /about for /about.html.
     let html = path.with_extension("html");
     html.is_file().then_some(html)
-}
-
-fn respond(
-    stream: &mut TcpStream,
-    status: u16,
-    mime: &str,
-    body: &[u8],
-    head_only: bool,
-) -> Result<()> {
-    let reason = match status {
-        200 => "OK",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        _ => "Error",
-    };
-    write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\n\
-         Content-Type: {mime}\r\n\
-         Content-Length: {}\r\n\
-         Cache-Control: no-store\r\n\
-         Connection: close\r\n\r\n",
-        body.len()
-    )?;
-    if !head_only {
-        stream.write_all(body)?;
-    }
-    stream.flush()?;
-    Ok(())
-}
-
-fn mime_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "xml" | "atom" | "rss" => "application/xml; charset=utf-8",
-        "txt" | "md" => "text/plain; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "avif" => "image/avif",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        "otf" => "font/otf",
-        "pdf" => "application/pdf",
-        "wasm" => "application/wasm",
-        _ => "application/octet-stream",
-    }
 }
 
 /// Append the reload script to an HTML response.
