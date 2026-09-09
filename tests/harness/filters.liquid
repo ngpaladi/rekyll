@@ -100,3 +100,11 @@
 {{ "2020-01-22 00:00:00 +0000" | date_to_string: "ordinal" }}
 {{ "x" | nonexistent_filter }}
 {{ "y" | some_plugin_filter: 1, "a" }}
+{{ site.posts | where_exp: "p", "p.title" | size }}
+{{ "a,b,c" | split: "," | where_exp: "x", "x != 'b'" | join: "," }}
+{{ "1,2,3,4" | split: "," | where_exp: "n", "n contains '2'" | join: "," }}
+{{ "a,b,c" | split: "," | find_exp: "x", "x == 'b'" }}
+{{ "a,b,c" | split: "," | find_exp: "x", "x == 'zz'" }}
+{{ "aa,ab,bc" | split: "," | group_by_exp: "x", "x | slice: 0" | map: "name" | join: "," }}
+{{ "aa,ab,bc" | split: "," | group_by_exp: "x", "x | slice: 0" | map: "size" | join: "," }}
+{{ "a,b,c" | split: "," | where_exp: "x", "x" | size }}

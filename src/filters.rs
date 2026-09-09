@@ -6,6 +6,7 @@
 //! downcases the remainder, `split` drops trailing empty fields, integer
 //! division stays integral, and every float renders with a decimal point.
 
+use crate::lax::{LaxObject, LaxValue};
 use crate::time::RTime;
 use crate::value::Value as RValue;
 use chrono_tz::Tz;
@@ -23,9 +24,15 @@ pub struct FilterCtx {
     pub timezone: Tz,
     pub smart_quotes: bool,
     pub site_time: RTime,
+    pub sass: crate::sass::Options,
+    /// A second parser, used by `where_exp` and friends to evaluate their
+    /// expression argument. It cannot be the parser these filters are being
+    /// registered on, so it is built first with its own context and is `None`
+    /// inside that build.
+    pub expr_parser: Option<Arc<liquid::Parser>>,
 }
 
-type FilterFn = fn(&dyn ValueView, &[Value], &FilterCtx) -> Result<Value>;
+type FilterFn = fn(&dyn ValueView, &[Value], &FilterCtx, &dyn Runtime) -> Result<Value>;
 
 /// A filter defined by a name and a function, so the whole set can be
 /// registered without a derive per filter.
@@ -98,7 +105,7 @@ impl Filter for BoundFilter {
         for expr in &self.args {
             args.push(expr.evaluate(runtime)?.into_owned());
         }
-        (self.func)(input, &args, &self.ctx)
+        (self.func)(input, &args, &self.ctx, runtime)
     }
 }
 
@@ -149,27 +156,188 @@ pub fn all() -> Vec<(&'static str, FilterFn)> {
         // applying it to filters Jekyll *does* have would turn a missing
         // feature into a wrong answer. `{{ posts | where_exp: ... }}` would
         // quietly return every post.
-        ("where_exp", f_unimplemented),
-        ("group_by_exp", f_unimplemented),
-        ("find_exp", f_unimplemented),
-        ("sample", f_unimplemented),
-        ("sassify", f_unimplemented),
-        ("scssify", f_unimplemented),
+        ("where_exp", f_where_exp),
+        ("group_by_exp", f_group_by_exp),
+        ("find_exp", f_find_exp),
+        ("sample", f_sample),
+        ("sassify", f_sassify),
+        ("scssify", f_scssify),
     ]
 }
 
-/// Pass the input through, but say so on stderr the first time, once per
-/// filter name.
-fn f_unimplemented(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| {
-        eprintln!(
-            "       Build Warning: a Jekyll filter rekyll does not implement was used \
-             (where_exp, group_by_exp, find_exp, sample, sassify or scssify). Its input was \
-             passed through unchanged, so the output differs from Jekyll's."
-        );
-    });
-    Ok(input.to_value())
+/// Evaluate an expression against each item, with `variable` bound to it.
+///
+/// Jekyll turns the argument into a `Liquid::Condition` (for `where_exp` and
+/// `find_exp`) or a `Liquid::Variable` (for `group_by_exp`) and evaluates it
+/// per item against the current context. Here the expression is wrapped in a
+/// tiny template and rendered by a second parser.
+fn eval_expr(
+    ctx: &FilterCtx,
+    runtime: &dyn Runtime,
+    variable: &str,
+    expression: &str,
+    items: &[Value],
+    condition: bool,
+) -> Option<Vec<String>> {
+    let parser = ctx.expr_parser.as_ref()?;
+    let template = if condition {
+        // A condition renders "1" when true and nothing when false.
+        format!("{{% if {expression} %}}1{{% endif %}}")
+    } else {
+        format!("{{{{ {expression} }}}}")
+    };
+    let template = parser.parse(&template).ok()?;
+
+    // Only pull in the globals the expression actually names. Fetching them
+    // all would materialise the whole site drop on every call.
+    let mut base = LaxObject::new();
+    for root in runtime.roots() {
+        let name = root.into_string();
+        if !mentions(expression, &name) {
+            continue;
+        }
+        if let Some(v) = runtime.try_get(&[liquid_core::model::Scalar::new(name.to_string())]) {
+            base.insert(name.to_string(), LaxValue::from_liquid(&v.into_owned()));
+        }
+    }
+
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let mut globals = base.clone();
+        globals.insert(variable.to_string(), LaxValue::from_liquid(item));
+        out.push(template.render(&globals).ok()?);
+    }
+    Some(out)
+}
+
+/// Does the expression reference this identifier as a whole word?
+fn mentions(expression: &str, name: &str) -> bool {
+    let bytes = expression.as_bytes();
+    let mut from = 0;
+    while let Some(i) = expression[from..].find(name) {
+        let start = from + i;
+        let end = start + name.len();
+        let before_ok = start == 0 || !is_ident(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_ident(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+fn is_ident(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// The two string arguments `where_exp`, `find_exp` and `group_by_exp` take.
+fn expr_args(args: &[Value]) -> Option<(String, String)> {
+    Some((arg_str(args, 0)?, arg_str(args, 1)?))
+}
+
+fn f_where_exp(input: &dyn ValueView, args: &[Value], c: &FilterCtx, r: &dyn Runtime) -> Result<Value> {
+    let Some((variable, expression)) = expr_args(args) else {
+        return Ok(input.to_value());
+    };
+    let items = array_of(input);
+    let Some(results) = eval_expr(c, r, &variable, &expression, &items, true)
+    else {
+        return Ok(input.to_value());
+    };
+    let kept = items
+        .into_iter()
+        .zip(results)
+        .filter(|(_, r)| !r.is_empty())
+        .map(|(item, _)| item)
+        .collect();
+    Ok(Value::Array(kept))
+}
+
+fn f_find_exp(input: &dyn ValueView, args: &[Value], c: &FilterCtx, r: &dyn Runtime) -> Result<Value> {
+    let Some((variable, expression)) = expr_args(args) else {
+        return Ok(input.to_value());
+    };
+    let items = array_of(input);
+    let Some(results) = eval_expr(c, r, &variable, &expression, &items, true)
+    else {
+        return Ok(input.to_value());
+    };
+    Ok(items
+        .into_iter()
+        .zip(results)
+        .find(|(_, r)| !r.is_empty())
+        .map(|(item, _)| item)
+        .unwrap_or(Value::Nil))
+}
+
+/// `group_by_exp`: group by the rendered expression, in first-seen order.
+fn f_group_by_exp(input: &dyn ValueView, args: &[Value], c: &FilterCtx, r: &dyn Runtime) -> Result<Value> {
+    let Some((variable, expression)) = expr_args(args) else {
+        return Ok(input.to_value());
+    };
+    let items = array_of(input);
+    let Some(names) = eval_expr(c, r, &variable, &expression, &items, false)
+    else {
+        return Ok(input.to_value());
+    };
+    Ok(grouped_array(items.into_iter().zip(names)))
+}
+
+/// `sample`: Ruby's `Array#sample`, which is unseeded and therefore not
+/// reproducible in Jekyll either.
+fn f_sample(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
+    let items = array_of(input);
+    if items.is_empty() {
+        return Ok(Value::Nil);
+    }
+    let n = args.first().and_then(|v| v.as_scalar()).and_then(|s| s.to_integer());
+    match n {
+        None => Ok(items[random_below(items.len())].clone()),
+        Some(n) if n <= 0 => Ok(Value::Array(Vec::new())),
+        Some(n) => {
+            // Ruby samples without replacement.
+            let mut pool = items;
+            let mut picked = Vec::new();
+            for _ in 0..(n as usize).min(pool.len()) {
+                picked.push(pool.remove(random_below(pool.len())));
+            }
+            Ok(Value::Array(picked))
+        }
+    }
+}
+
+/// xorshift64*, seeded from the clock. Good enough to shuffle a list.
+fn random_below(len: usize) -> usize {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static STATE: AtomicU64 = AtomicU64::new(0);
+    let mut x = STATE.load(Ordering::Relaxed);
+    if x == 0 {
+        x = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x2545F4914F6CDD1D)
+            | 1;
+    }
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    STATE.store(x, Ordering::Relaxed);
+    (x.wrapping_mul(0x2545F4914F6CDD1D) >> 33) as usize % len
+}
+
+fn f_sassify(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
+    compile_sass(&s(input), c, true)
+}
+
+fn f_scssify(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
+    compile_sass(&s(input), c, false)
+}
+
+fn compile_sass(source: &str, c: &FilterCtx, indented: bool) -> Result<Value> {
+    crate::sass::compile_with(&c.sass, source, indented)
+        .map(Value::scalar)
+        .map_err(|e| Error::with_msg(e.to_string()))
 }
 
 // -- helpers ----------------------------------------------------------------
@@ -200,12 +368,12 @@ fn to_rvalue(v: &dyn ValueView) -> RValue {
 
 // -- Jekyll filters ---------------------------------------------------------
 
-fn f_slugify(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_slugify(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let mode = arg_str(args, 0).unwrap_or_else(|| "default".into());
     Ok(Value::scalar(crate::slug::slugify(&s(input), &mode, false)))
 }
 
-fn f_xml_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_xml_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     // Ruby's CGI.escapeHTML.
     Ok(Value::scalar(
         s(input)
@@ -218,7 +386,7 @@ fn f_xml_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<V
 }
 
 /// `escape_once` leaves existing entity references alone.
-fn f_escape_once(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_escape_once(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let text = s(input);
     let re = regex::Regex::new(r"&(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);").unwrap();
     let mut out = String::with_capacity(text.len());
@@ -241,7 +409,7 @@ fn escape_html_ruby(s: &str) -> String {
 }
 
 /// `cgi_escape` / Liquid's `url_encode`: CGI.escape, where a space is `+`.
-fn f_cgi_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_cgi_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     Ok(Value::scalar(cgi_escape(&s(input))))
 }
 
@@ -259,7 +427,7 @@ fn cgi_escape(input: &str) -> String {
     out
 }
 
-fn f_url_decode(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_url_decode(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let text = s(input).replace('+', " ");
     Ok(Value::scalar(
         percent_encoding::percent_decode_str(&text)
@@ -269,7 +437,7 @@ fn f_url_decode(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<V
 }
 
 /// `uri_escape`: Addressable's normalize, which leaves sub-delimiters alone.
-fn f_uri_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_uri_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     const KEEP: &str = "!#$&'()*+,-./:;=?@_~";
     let mut out = String::new();
     for ch in s(input).chars() {
@@ -285,7 +453,7 @@ fn f_uri_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<V
     Ok(Value::scalar(out))
 }
 
-fn f_number_of_words(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_number_of_words(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     Ok(Value::scalar(s(input).split_whitespace().count() as i64))
 }
 
@@ -293,6 +461,7 @@ fn f_array_to_sentence_string(
     input: &dyn ValueView,
     args: &[Value],
     _c: &FilterCtx,
+    _r: &dyn Runtime,
 ) -> Result<Value> {
     let connector = arg_str(args, 0).unwrap_or_else(|| "and".into());
     let items: Vec<String> = array_of(input)
@@ -308,7 +477,7 @@ fn f_array_to_sentence_string(
     Ok(Value::scalar(out))
 }
 
-fn f_jsonify(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_jsonify(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     Ok(Value::scalar(render_value(&to_rvalue(input), true)))
 }
 
@@ -362,7 +531,7 @@ fn json_string(s: &str) -> String {
 }
 
 /// `to_integer`: Ruby's `to_i`, which truncates and tolerates junk.
-fn f_to_integer(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_to_integer(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let v = to_rvalue(input);
     let n = match v {
         RValue::Int(i) => i,
@@ -392,19 +561,19 @@ fn leading_number(s: &str) -> Option<f64> {
 }
 
 /// `inspect`: Ruby's `Object#inspect`, then HTML-escaped by Jekyll.
-fn f_inspect(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_inspect(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     Ok(Value::scalar(escape_html_ruby(&render_value(&to_rvalue(input), false))))
 }
 
-fn f_normalize_whitespace(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_normalize_whitespace(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     Ok(Value::scalar(s(input).split_whitespace().collect::<Vec<_>>().join(" ")))
 }
 
-fn f_markdownify(input: &dyn ValueView, _a: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_markdownify(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     Ok(Value::scalar(crate::markdown::convert_opts(&s(input), c.smart_quotes)))
 }
 
-fn f_smartify(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_smartify(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     Ok(Value::scalar(crate::markdown::smartify_text(&s(input))))
 }
 
@@ -435,7 +604,7 @@ fn to_time(input: &dyn ValueView, c: &FilterCtx) -> Option<RTime> {
     }
 }
 
-fn f_date(input: &dyn ValueView, args: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_date(input: &dyn ValueView, args: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let format = match arg_str(args, 0) {
         Some(f) if !f.is_empty() => f,
         // Liquid returns the input untouched when no format is given.
@@ -455,11 +624,11 @@ fn date_with(input: &dyn ValueView, c: &FilterCtx, fmt: &str) -> Result<Value> {
 }
 
 /// `date_to_string`: "%d %b %Y", or ordinal form when asked.
-fn f_date_to_string(input: &dyn ValueView, args: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_date_to_string(input: &dyn ValueView, args: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     date_to_format(input, args, c, "%b")
 }
 
-fn f_date_to_long_string(input: &dyn ValueView, args: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_date_to_long_string(input: &dyn ValueView, args: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     date_to_format(input, args, c, "%B")
 }
 
@@ -493,31 +662,31 @@ fn ordinal(day: u32) -> String {
     format!("{day}{suffix}")
 }
 
-fn f_date_to_xmlschema(input: &dyn ValueView, _a: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_date_to_xmlschema(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     date_with(input, c, "%Y-%m-%dT%H:%M:%S%:z")
 }
 
-fn f_date_to_rfc822(input: &dyn ValueView, _a: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_date_to_rfc822(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     date_with(input, c, "%a, %d %b %Y %H:%M:%S %z")
 }
 
 // -- URLs -------------------------------------------------------------------
 
-fn f_relative_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_relative_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     if input.is_nil() {
         return Ok(Value::Nil);
     }
     Ok(Value::scalar(crate::urlfilters::relative_url(&s(input), &c.baseurl)))
 }
 
-fn f_absolute_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx) -> Result<Value> {
+fn f_absolute_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     if input.is_nil() {
         return Ok(Value::Nil);
     }
     Ok(Value::scalar(crate::urlfilters::absolute_url(&s(input), &c.url, &c.baseurl)))
 }
 
-fn f_strip_index(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_strip_index(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     if input.is_nil() {
         return Ok(Value::Nil);
     }
@@ -526,7 +695,7 @@ fn f_strip_index(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<
 
 // -- arrays -----------------------------------------------------------------
 
-fn f_push(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_push(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let mut a = array_of(input);
     if let Some(v) = args.first() {
         a.push(v.clone());
@@ -534,13 +703,13 @@ fn f_push(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value
     Ok(Value::Array(a))
 }
 
-fn f_pop(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_pop(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let mut a = array_of(input);
     a.pop();
     Ok(Value::Array(a))
 }
 
-fn f_shift(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_shift(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let mut a = array_of(input);
     if !a.is_empty() {
         a.remove(0);
@@ -548,7 +717,7 @@ fn f_shift(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value>
     Ok(Value::Array(a))
 }
 
-fn f_unshift(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_unshift(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let mut a = array_of(input);
     if let Some(v) = args.first() {
         a.insert(0, v.clone());
@@ -558,7 +727,7 @@ fn f_unshift(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Va
 
 /// `where`: select items whose property equals the given value, comparing as
 /// strings the way Jekyll does.
-fn f_where(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_where(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let key = arg_str(args, 0).unwrap_or_default();
     let want = args.get(1);
     let out: Vec<Value> = array_of(input)
@@ -568,7 +737,7 @@ fn f_where(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Valu
     Ok(Value::Array(out))
 }
 
-fn f_find(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_find(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let key = arg_str(args, 0).unwrap_or_default();
     let want = args.get(1);
     Ok(array_of(input)
@@ -593,7 +762,7 @@ fn property_matches(item: &Value, key: &str, want: Option<&Value>) -> bool {
 
 /// `group_by`: groups preserve first-seen order, and each group is
 /// `{"name" => value, "items" => [...], "size" => n}`.
-fn f_group_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_group_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let key = arg_str(args, 0).unwrap_or_default();
     let mut order: Vec<String> = Vec::new();
     let mut groups: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
@@ -626,7 +795,7 @@ fn f_group_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<V
 
 /// `sort`: by a property when given one, else by rendered value. Ruby's sort
 /// puts nil first.
-fn f_sort(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_sort(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let key = arg_str(args, 0);
     let mut items = array_of(input);
     items.sort_by(|a, b| match &key {
@@ -656,7 +825,7 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
 /// Ruby's `map` indexes each item with the property. For a String that is
 /// `String#[]`, a substring search, so a non-matching property yields nil
 /// rather than dropping the item.
-fn f_map(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_map(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let key = arg_str(args, 0).unwrap_or_default();
     let out: Vec<Value> = array_of(input)
         .into_iter()
@@ -677,7 +846,7 @@ fn f_map(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value>
 // -- overrides --------------------------------------------------------------
 
 /// Ruby's `String#capitalize` downcases everything after the first character.
-fn f_capitalize(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_capitalize(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let text = s(input);
     let mut chars = text.chars();
     let out = match chars.next() {
@@ -688,7 +857,7 @@ fn f_capitalize(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<V
 }
 
 /// Ruby's `String#split` drops trailing empty fields.
-fn f_split(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_split(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let text = s(input);
     let sep = arg_str(args, 0).unwrap_or_default();
     let mut parts: Vec<String> = if sep.is_empty() {
@@ -704,7 +873,7 @@ fn f_split(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Valu
 
 /// Integer division stays integral in Ruby; a float on either side makes it
 /// floating point.
-fn f_divided_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx) -> Result<Value> {
+fn f_divided_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let a = to_rvalue(input);
     let b = args.first().map(|v| crate::liquid_bridge::from_liquid(v)).unwrap_or(RValue::Int(1));
     let both_int = matches!(a, RValue::Int(_)) && matches!(b, RValue::Int(_));
@@ -727,4 +896,29 @@ fn numeric(v: &RValue) -> f64 {
         RValue::Bool(true) => 1.0,
         _ => 0.0,
     }
+}
+
+/// `Jekyll::Filters::GroupingFilters#grouped_array`: one entry per distinct
+/// name, in first-seen order, each `{"name", "items", "size"}`.
+fn grouped_array(pairs: impl Iterator<Item = (Value, String)>) -> Value {
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
+    for (item, name) in pairs {
+        if !groups.contains_key(&name) {
+            order.push(name.clone());
+        }
+        groups.entry(name).or_default().push(item);
+    }
+    let out: Vec<Value> = order
+        .into_iter()
+        .map(|name| {
+            let items = groups.remove(&name).unwrap_or_default();
+            let mut o = liquid_core::model::Object::new();
+            o.insert("name".into(), Value::scalar(name));
+            o.insert("size".into(), Value::scalar(items.len() as i64));
+            o.insert("items".into(), Value::Array(items));
+            Value::Object(o)
+        })
+        .collect();
+    Value::Array(out)
 }

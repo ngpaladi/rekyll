@@ -14,30 +14,51 @@ use crate::site::Site;
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
+/// The `sass:` settings a compile needs, so the filters can compile without a
+/// whole `Site`.
+#[derive(Debug, Clone)]
+pub struct Options {
+    pub load_paths: Vec<PathBuf>,
+    pub style: String,
+}
+
+impl Options {
+    pub fn from_site(site: &Site) -> Options {
+        let sass_dir = site
+            .config
+            .get("sass")
+            .and_then(|s| s.get("sass_dir"))
+            .and_then(crate::value::Value::as_str)
+            .unwrap_or("_sass");
+
+        let mut load_paths = vec![site.source.join(sass_dir)];
+        if let Some(extra) = site.config.get("sass").and_then(|s| s.get("load_paths")) {
+            for p in crate::document::string_list(Some(extra)) {
+                load_paths.push(site.source.join(p));
+            }
+        }
+
+        let style = site
+            .config
+            .get("sass")
+            .and_then(|s| s.get("style"))
+            .and_then(crate::value::Value::as_str)
+            .unwrap_or("compact")
+            .trim_start_matches(':')
+            .to_string();
+
+        Options { load_paths, style }
+    }
+}
+
 /// Compile SCSS/Sass source, honouring `sass.load_paths` and `sass.style`.
 pub fn compile(site: &Site, source: &str, indented: bool) -> Result<String> {
-    let sass_dir = site
-        .config
-        .get("sass")
-        .and_then(|s| s.get("sass_dir"))
-        .and_then(crate::value::Value::as_str)
-        .unwrap_or("_sass");
+    compile_with(&Options::from_site(site), source, indented)
+}
 
-    let mut load_paths: Vec<PathBuf> = vec![site.source.join(sass_dir)];
-    if let Some(extra) = site.config.get("sass").and_then(|s| s.get("load_paths")) {
-        for p in crate::document::string_list(Some(extra)) {
-            load_paths.push(site.source.join(p));
-        }
-    }
-
-    let style = site
-        .config
-        .get("sass")
-        .and_then(|s| s.get("style"))
-        .and_then(crate::value::Value::as_str)
-        .unwrap_or("compact")
-        .trim_start_matches(':')
-        .to_string();
+pub fn compile_with(opts: &Options, source: &str, indented: bool) -> Result<String> {
+    let load_paths = opts.load_paths.clone();
+    let style = opts.style.clone();
 
     let mut options = grass::Options::default().style(grass::OutputStyle::Expanded);
     for p in &load_paths {

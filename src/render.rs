@@ -200,13 +200,32 @@ impl Renderer {
         let urls = std::sync::Arc::new(build_url_index(site));
         let baseurl = std::sync::Arc::new(site.config.str("baseurl").to_string());
 
-        let ctx = std::sync::Arc::new(crate::filters::FilterCtx {
-            baseurl: site.config.str("baseurl").to_string(),
-            url: site.config.str("url").to_string(),
-            timezone: site.timezone,
-            smart_quotes: crate::markdown::smart_quotes(site),
-            site_time: site.time.clone(),
-        });
+        // `where_exp` and friends evaluate their expression argument with a
+        // second parser, which cannot be the one they are registered on. Build
+        // that one first, with an identical context minus the back-reference.
+        let base_ctx = |expr_parser| {
+            std::sync::Arc::new(crate::filters::FilterCtx {
+                baseurl: site.config.str("baseurl").to_string(),
+                url: site.config.str("url").to_string(),
+                timezone: site.timezone,
+                smart_quotes: crate::markdown::smart_quotes(site),
+                site_time: site.time.clone(),
+                sass: crate::sass::Options::from_site(site),
+                expr_parser,
+            })
+        };
+
+        let mut expr_builder = liquid::ParserBuilder::with_stdlib();
+        let inner_ctx = base_ctx(None);
+        for (name, func) in crate::filters::all() {
+            expr_builder =
+                expr_builder.filter(crate::filters::JekyllFilter::new(name, func, inner_ctx.clone()));
+        }
+        let expr_parser = std::sync::Arc::new(
+            expr_builder.build().map_err(|e| anyhow!("building expression parser: {e}"))?,
+        );
+
+        let ctx = base_ctx(Some(expr_parser));
 
         let mut builder = liquid::ParserBuilder::with_stdlib()
             .partials(partials)

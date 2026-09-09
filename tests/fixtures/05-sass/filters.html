@@ -1,0 +1,9 @@
+---
+---
+{% capture scss %}$brand: #336699;
+.from-filter { a { color: $brand; } }{% endcapture %}
+<style>{{ scss | scssify }}</style>
+{% capture sass %}$pad: 3px
+.indented
+  padding: $pad{% endcapture %}
+<style>{{ sass | sassify }}</style>
