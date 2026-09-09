@@ -223,10 +223,10 @@ impl Renderer {
 
         let mut builder = liquid::ParserBuilder::with_stdlib()
             .partials(partials)
-            .tag(crate::tags::IncludeTag::new())
-            .tag(crate::tags::IncludeTag::relative())
-            .tag(crate::tags::LinkTag::new(urls.clone(), baseurl.clone()))
-            .tag(crate::tags::LinkTag::post_url(urls, baseurl))
+            .tag(crate::tags::JekyllTag::include())
+            .tag(crate::tags::JekyllTag::include_relative())
+            .tag(crate::tags::JekyllTag::link(urls.clone(), baseurl.clone()))
+            .tag(crate::tags::JekyllTag::post_url(urls, baseurl))
             .block(crate::tags::HighlightTag::new());
 
         // Registered after the stdlib so Jekyll's overrides win.

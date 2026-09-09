@@ -60,41 +60,63 @@ fn parse_include_markup(markup: &str) -> IncludeArgs {
     IncludeArgs { file, params }
 }
 
-// -- include ----------------------------------------------------------------
+// -- include, include_relative, link, post_url ------------------------------
 
-#[derive(Clone, Debug, Default)]
-pub struct IncludeTag {
+/// The four argument-taking tags, registered by name the way the filters are.
+#[derive(Clone, Debug)]
+pub struct JekyllTag {
+    name: &'static str,
+    kind: Kind,
+}
+
+#[derive(Clone, Debug)]
+enum Kind {
     /// `include_relative` resolves against the including file's directory;
     /// plain `include` against `_includes`.
-    relative: bool,
+    Include { relative: bool },
+    /// `post_url` matches by post basename rather than exact relative path.
+    /// Both link tags emit `relative_url(item)`, so the baseurl is prepended.
+    Link { post: bool, urls: Arc<UrlIndex>, baseurl: Arc<String> },
 }
 
-impl IncludeTag {
-    pub fn new() -> Self {
-        IncludeTag { relative: false }
+impl JekyllTag {
+    pub fn include() -> Self {
+        JekyllTag { name: "include", kind: Kind::Include { relative: false } }
     }
-    pub fn relative() -> Self {
-        IncludeTag { relative: true }
+    pub fn include_relative() -> Self {
+        JekyllTag { name: "include_relative", kind: Kind::Include { relative: true } }
+    }
+    pub fn link(urls: Arc<UrlIndex>, baseurl: Arc<String>) -> Self {
+        JekyllTag { name: "link", kind: Kind::Link { post: false, urls, baseurl } }
+    }
+    pub fn post_url(urls: Arc<UrlIndex>, baseurl: Arc<String>) -> Self {
+        JekyllTag { name: "post_url", kind: Kind::Link { post: true, urls, baseurl } }
     }
 }
 
-impl TagReflection for IncludeTag {
+impl TagReflection for JekyllTag {
     fn tag(&self) -> &'static str {
-        if self.relative {
-            "include_relative"
-        } else {
-            "include"
-        }
+        self.name
     }
     fn description(&self) -> &'static str {
-        "Includes a partial from _includes."
+        ""
     }
 }
 
-impl ParseTag for IncludeTag {
+impl ParseTag for JekyllTag {
     fn parse(&self, arguments: TagTokenIter<'_>, _options: &Language) -> Result<Box<dyn Renderable>> {
-        let args = parse_include_markup(arguments.raw_markup());
-        Ok(Box::new(Include { args, relative: self.relative }))
+        let markup = arguments.raw_markup();
+        Ok(match &self.kind {
+            Kind::Include { relative } => {
+                Box::new(Include { args: parse_include_markup(markup), relative: *relative })
+            }
+            Kind::Link { post, urls, baseurl } => Box::new(Link {
+                target: markup.trim().trim_matches(['"', '\'']).to_string(),
+                urls: urls.clone(),
+                post: *post,
+                baseurl: baseurl.clone(),
+            }),
+        })
     }
 
     fn reflection(&self) -> &dyn TagReflection {
@@ -176,55 +198,6 @@ fn evaluate_bare(runtime: &dyn Runtime, name: &str) -> liquid_core::model::Value
     }
     let path: Vec<Scalar> = name.split('.').map(|p| Scalar::new(p.to_owned())).collect();
     runtime.try_get(&path).map(|v| v.into_owned()).unwrap_or(Value::Nil)
-}
-
-// -- link and post_url ------------------------------------------------------
-
-#[derive(Clone, Debug)]
-pub struct LinkTag {
-    urls: Arc<UrlIndex>,
-    /// `post_url` matches by post basename rather than exact relative path.
-    post: bool,
-    /// Both tags emit `relative_url(item)`, so the baseurl is prepended.
-    baseurl: Arc<String>,
-}
-
-impl LinkTag {
-    pub fn new(urls: Arc<UrlIndex>, baseurl: Arc<String>) -> Self {
-        LinkTag { urls, post: false, baseurl }
-    }
-    pub fn post_url(urls: Arc<UrlIndex>, baseurl: Arc<String>) -> Self {
-        LinkTag { urls, post: true, baseurl }
-    }
-}
-
-impl TagReflection for LinkTag {
-    fn tag(&self) -> &'static str {
-        if self.post {
-            "post_url"
-        } else {
-            "link"
-        }
-    }
-    fn description(&self) -> &'static str {
-        "Resolves a source path to its output URL."
-    }
-}
-
-impl ParseTag for LinkTag {
-    fn parse(&self, arguments: TagTokenIter<'_>, _options: &Language) -> Result<Box<dyn Renderable>> {
-        let target = arguments.raw_markup().trim().trim_matches(['"', '\'']).to_string();
-        Ok(Box::new(Link {
-            target,
-            urls: self.urls.clone(),
-            post: self.post,
-            baseurl: self.baseurl.clone(),
-        }))
-    }
-
-    fn reflection(&self) -> &dyn TagReflection {
-        self
-    }
 }
 
 #[derive(Debug)]

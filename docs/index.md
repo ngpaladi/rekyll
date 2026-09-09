@@ -74,7 +74,16 @@ they still match Jekyll's byte for byte.
 ## Shipping it
 
 The binary only needs libc, so you can copy it to another machine and it
-runs. Everything compiled into it is under MIT, Apache-2.0, BSD, Zlib or
+runs. If you'd rather it needed nothing at all (an Alpine box, a
+`FROM scratch` container), build it against musl:
+
+```
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+You get a 9.4 MB static binary in `target/x86_64-unknown-linux-musl/release/`
+that produces the same bytes as the normal one. Everything compiled into it is under MIT, Apache-2.0, BSD, Zlib or
 Unlicense, all of which let you redistribute as long as the license text and
 copyright notices travel with the binary. They do:
 

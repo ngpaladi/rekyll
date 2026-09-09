@@ -128,8 +128,17 @@ CoffeeScript, TOML config, non-YAML data files, and incremental builds.
 
 ## Distributing the binary
 
-The release binary is statically linked apart from libc, so it can be copied
-anywhere. Everything compiled into it is MIT, Apache-2.0, BSD, Zlib or
+The release binary links only libc, so it runs on any glibc Linux. For a
+fully static one (no libc either, so it also runs on Alpine or in a
+`FROM scratch` container):
+
+```
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+That binary is about 9.4 MiB, `ldd` reports it statically linked, and it is
+byte-identical to the glibc build on every fixture. Everything compiled into it is MIT, Apache-2.0, BSD, Zlib or
 Unlicense, and `THIRD_PARTY_LICENSES.md` lists each crate with its license
 text. That file is embedded, so a shipped binary carries its own attribution:
 
