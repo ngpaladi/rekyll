@@ -8,7 +8,28 @@ pkgs = {(p["name"], p["version"]): p for p in meta["packages"]}
 tree = subprocess.check_output(["cargo", "tree", "-e", "normal", "--prefix", "none"], text=True)
 crates = sorted({tuple(l.split()[:2]) for l in tree.splitlines() if l.strip()})
 crates = [(n, v.lstrip("v")) for n, v in crates if n != "rekyll"]
-texts, rows = {}, []
+MIT = """MIT License
+
+Copyright (c) {holders}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE."""
+texts, rows, unattributed = {}, [], []
 for name, ver in crates:
     p = pkgs[(name, ver)]
     d = os.path.dirname(p["manifest_path"])
@@ -19,6 +40,18 @@ for name, ver in crates:
         body = open(os.path.join(d, f), encoding="utf-8", errors="replace").read().strip()
         key = re.sub(r"\s+", " ", body)
         texts.setdefault(key, (body, []))[1].append(f"{name} {ver} ({f})")
+    if not files:
+        # The crate's tarball ships no license file. MIT only asks that the
+        # copyright notice travel, so write the standard text with the
+        # authors Cargo knows about; anything but MIT needs a human.
+        if "MIT" not in lic:
+            unattributed.append(f"{name} {ver} ({lic})")
+            continue
+        holders = ", ".join(re.sub(r"\s*<[^>]*>", "", a) for a in p.get("authors") or []) or name
+        body = MIT.format(holders=holders)
+        texts.setdefault(body, (body, []))[1].append(f"{name} {ver} (MIT, notice from Cargo metadata)")
+if unattributed:
+    raise SystemExit("no license text for: " + ", ".join(unattributed))
 out = ["# Third-party licenses", "",
        "rekyll is statically linked; the binary contains code from the crates below.",
        "Dual-licensed crates (`MIT OR Apache-2.0`, `Unlicense/MIT`) are used under MIT.",

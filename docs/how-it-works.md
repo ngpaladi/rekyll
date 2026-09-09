@@ -197,10 +197,13 @@ Sass goes through `grass` in expanded mode and then gets reformatted into
 libsass's `:compact` style (one rule per line, a blank line between
 top-level blocks, none after a comment).
 
-**The quirk:** there are about six of these per stage in `markdown.rs`; the
-comments name each one. The one that cost the most: kramdown decides
-whether `'` opens or closes a quote by looking at the preceding character in
-the *source*, so a quote right after inline code sees the closing backtick.
+**The quirk:** there are a dozen in `markdown.rs`, each with a comment
+naming it. The one that cost the most: kramdown decides whether `'` opens
+or closes a quote by looking at the preceding character in the *source*, so
+a quote right after inline code sees the closing backtick. The most recent:
+a code span keeps its newlines, and a lone backtick between spaces isn't a
+code span at all. I found that one writing this page, which is a decent
+argument for writing docs.
 
 **Test:** `./tests/harness/md_diff.sh` diffs a corpus against kramdown;
 fixture `05-sass` covers Sass.

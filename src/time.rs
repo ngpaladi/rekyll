@@ -22,9 +22,15 @@ pub struct RTime {
 impl RTime {
     /// Ruby's `Time#strftime` (the `strftime-ruby` crate reproduces its
     /// flags: `%-d`, `%^b`, `%_H`, widths). Ruby raises on a bad format and
-    /// Liquid does not rescue it, so a build fails there too.
+    /// Liquid does not rescue it, so a template's `date:` argument fails the
+    /// build there too; that is `try_format`. Plain `format` is for the
+    /// constant formats in rekyll itself.
+    pub fn try_format(&self, fmt: &str) -> Result<String> {
+        strftime::string::strftime(self, fmt).map_err(|e| anyhow!("invalid date format {fmt:?}: {e}"))
+    }
+
     pub fn format(&self, fmt: &str) -> String {
-        strftime::string::strftime(self, fmt).unwrap_or_else(|e| panic!("invalid date format {fmt:?}: {e}"))
+        self.try_format(fmt).expect("constant format")
     }
 
     /// Ruby's `Time#to_s`.

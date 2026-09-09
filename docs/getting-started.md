@@ -8,7 +8,7 @@ skip to the end: you just run `rekyll build` in it.
 ## 1. Install
 
 ```
-git clone <this repo> rekyll && cd rekyll
+git clone https://github.com/ngpaladi/rekyll.git && cd rekyll
 cargo install --path . --locked
 ```
 

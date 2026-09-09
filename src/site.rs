@@ -170,9 +170,7 @@ impl Site {
             return Ok(());
         }
         for (rel, path) in walk_files(&dir)? {
-            let text = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading layout {}", path.display()))?;
-            let parsed = parse_front_matter(&text);
+            let parsed = self.read_front_matter(&path)?;
             // Layouts are keyed by path without extension, e.g. "post" or
             // "nested/post".
             let key = split_ext(&rel).0.to_string();
@@ -314,9 +312,7 @@ impl Site {
         relative_path: &str,
         label: &str,
     ) -> Result<Option<Document>> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading document {}", path.display()))?;
-        let parsed = parse_front_matter(&text);
+        let parsed = self.read_front_matter(path)?;
         let mut data = deep_merge(&self.defaults.all(relative_path, label), &parsed.data);
 
         let extname = split_ext(relative_path).1.to_string();
@@ -371,6 +367,21 @@ impl Site {
         };
 
         Ok(if self.publish(&doc) { Some(doc) } else { None })
+    }
+
+    /// Read a file and split off its front matter. Jekyll logs a YAML error
+    /// and carries on with empty data unless `strict_front_matter` is set.
+    fn read_front_matter(&self, path: &Path) -> Result<FrontMatter> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let (parsed, error) = parse_front_matter(&text);
+        if let Some(e) = error {
+            eprintln!("             Error: YAML Exception reading {}: {e}", path.display());
+            if self.config.bool("strict_front_matter") {
+                return Err(e);
+            }
+        }
+        Ok(parsed)
     }
 
     /// `Publisher#publish?`.
@@ -458,9 +469,7 @@ impl Site {
 
     fn read_page(&self, dir: &str, name: &str) -> Result<Page> {
         let path = self.abs(dir).join(name);
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading page {}", path.display()))?;
-        let parsed = parse_front_matter(&text);
+        let parsed = self.read_front_matter(&path)?;
 
         // `Page#process`: extension, then basename with trailing dots stripped.
         let (stem, ext) = split_ext(name);
@@ -724,17 +733,19 @@ fn starts_with_front_matter(text: &str) -> bool {
     R.get_or_init(|| Regex::new(r"\A---\s*\r?\n").unwrap()).is_match(text)
 }
 
-pub fn parse_front_matter(text: &str) -> FrontMatter {
-    if let Some(caps) = fm_regex().captures(text) {
-        let yaml_src = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        let end = caps.get(0).unwrap().end();
-        let data = crate::yaml::load(yaml_src)
-            .ok()
-            .and_then(|v| v.as_object().cloned())
-            // A front-matter block holding only comments parses to nil, which
-            // Jekyll turns into an empty hash rather than an error.
-            .unwrap_or_default();
-        return FrontMatter { data, content: text[end..].to_string() };
-    }
-    FrontMatter { data: Object::new(), content: text.to_string() }
+/// Split a file into front matter and content. A YAML error comes back
+/// alongside empty data, since the content is still usable.
+pub fn parse_front_matter(text: &str) -> (FrontMatter, Option<anyhow::Error>) {
+    let Some(caps) = fm_regex().captures(text) else {
+        return (FrontMatter { data: Object::new(), content: text.to_string() }, None);
+    };
+    let yaml_src = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+    let content = text[caps.get(0).unwrap().end()..].to_string();
+    // A front-matter block holding only comments parses to nil, which Jekyll
+    // turns into an empty hash rather than an error.
+    let (data, error) = match crate::yaml::load(yaml_src) {
+        Ok(v) => (v.as_object().cloned().unwrap_or_default(), None),
+        Err(e) => (Object::new(), Some(e)),
+    };
+    (FrontMatter { data, content }, error)
 }

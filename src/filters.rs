@@ -577,7 +577,7 @@ fn f_date(input: &dyn ValueView, args: &[Value], c: &FilterCtx, _r: &dyn Runtime
 /// Format the input as a time, or hand it back if it is not one.
 fn date_with(input: &dyn ValueView, c: &FilterCtx, fmt: &str) -> Result<Value> {
     match to_time(input, c) {
-        Some(t) => Ok(Value::scalar(t.format(fmt))),
+        Some(t) => t.try_format(fmt).map(Value::scalar).map_err(|e| Error::with_msg(e.to_string())),
         None => Ok(input.to_value()),
     }
 }
