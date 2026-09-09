@@ -18,7 +18,7 @@
 //! bullet markers) are not reproduced.
 
 use crate::site::Site;
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -107,6 +107,13 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// One indented line of output.
+    fn line(&mut self, s: &str) {
+        self.pad();
+        self.out.push_str(s);
+        self.out.push('\n');
+    }
+
     /// Emit a run of sibling blocks, reinstating the blank lines that
     /// separated them in the source. Kramdown keeps blank lines as `:blank`
     /// elements and converts each run to a single newline.
@@ -143,7 +150,7 @@ impl<'a> Emitter<'a> {
                 let close = matching_end(events, i, end);
                 let text = raw_text(events, i + 1, close);
                 let id = self.header_id(&text);
-                let n = heading_number(*level);
+                let n = *level as u8;
                 self.pad();
                 self.out.push_str(&format!("<h{n} id=\"{}\">", escape_attr(&id)));
                 self.inlines(events, i + 1, close);
@@ -152,52 +159,42 @@ impl<'a> Emitter<'a> {
             }
             Event::Start(Tag::BlockQuote(_)) => {
                 let close = matching_end(events, i, end);
-                self.pad();
-                self.out.push_str("<blockquote>\n");
+                self.line("<blockquote>");
                 self.indent += 1;
                 self.blocks(events, i + 1, close);
                 self.indent -= 1;
-                self.pad();
-                self.out.push_str("</blockquote>\n");
+                self.line("</blockquote>");
                 close + 1
             }
             Event::Start(Tag::List(first)) => {
                 let close = matching_end(events, i, end);
-                let ordered = first.is_some();
-                self.pad();
                 match first {
                     // Kramdown omits start="1"; any other start is emitted.
-                    Some(n) if *n != 1 => self.out.push_str(&format!("<ol start=\"{n}\">\n")),
-                    Some(_) => self.out.push_str("<ol>\n"),
-                    None => self.out.push_str("<ul>\n"),
+                    Some(n) if *n != 1 => self.line(&format!("<ol start=\"{n}\">")),
+                    Some(_) => self.line("<ol>"),
+                    None => self.line("<ul>"),
                 }
                 self.indent += 1;
                 self.list_items(events, i + 1, close);
                 self.indent -= 1;
-                self.pad();
-                self.out.push_str(if ordered { "</ol>\n" } else { "</ul>\n" });
+                self.line(if first.is_some() { "</ol>" } else { "</ul>" });
                 close + 1
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 let close = matching_end(events, i, end);
                 let lang = match kind {
-                    CodeBlockKind::Fenced(info) => {
-                        let first = info.split_whitespace().next().unwrap_or("");
-                        if first.is_empty() {
-                            DEFAULT_LANG.to_string()
-                        } else {
-                            first.to_string()
-                        }
-                    }
-                    CodeBlockKind::Indented => DEFAULT_LANG.to_string(),
+                    CodeBlockKind::Fenced(info) => info.split_whitespace().next().unwrap_or(DEFAULT_LANG),
+                    CodeBlockKind::Indented => DEFAULT_LANG,
                 };
-                let mut body = String::new();
-                for (e, _) in &events[i + 1..close] {
-                    if let Event::Text(t) = e {
-                        body.push_str(t);
-                    }
-                }
-                self.code_block(&lang, &body);
+                let body: String = events[i + 1..close]
+                    .iter()
+                    .filter_map(|(e, _)| if let Event::Text(t) = e { Some(&**t) } else { None })
+                    .collect();
+                self.line(&format!(
+                    "<div class=\"language-{} highlighter-rouge\"><div class=\"highlight\"><pre class=\"highlight\"><code>{}</code></pre></div></div>",
+                    escape_attr(lang),
+                    escape_html(&body)
+                ));
                 close + 1
             }
             Event::Start(Tag::Table(alignments)) => {
@@ -207,8 +204,7 @@ impl<'a> Emitter<'a> {
                 close + 1
             }
             Event::Rule => {
-                self.pad();
-                self.out.push_str("<hr />\n");
+                self.line("<hr />");
                 i + 1
             }
             Event::Html(html) => {
@@ -246,15 +242,14 @@ impl<'a> Emitter<'a> {
             // indented lines.
             let loose = matches!(events.get(i + 1).map(|(e, _)| e), Some(Event::Start(Tag::Paragraph)));
 
-            self.pad();
             if loose {
-                self.out.push_str("<li>\n");
+                self.line("<li>");
                 self.indent += 1;
                 self.blocks(events, i + 1, close);
                 self.indent -= 1;
-                self.pad();
-                self.out.push_str("</li>\n");
+                self.line("</li>");
             } else {
+                self.pad();
                 self.out.push_str("<li>");
                 // Inline content up to the first nested block, then any nested
                 // list indented beneath it.
@@ -273,16 +268,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    fn code_block(&mut self, lang: &str, body: &str) {
-        self.pad();
-        self.out.push_str(&format!(
-            "<div class=\"language-{} highlighter-rouge\"><div class=\"highlight\"><pre class=\"highlight\"><code>",
-            escape_attr(lang)
-        ));
-        self.out.push_str(&escape_html(body));
-        self.out.push_str("</code></pre></div></div>\n");
-    }
-
     fn table(
         &mut self,
         events: &[(Event, std::ops::Range<usize>)],
@@ -290,8 +275,7 @@ impl<'a> Emitter<'a> {
         end: usize,
         alignments: &[pulldown_cmark::Alignment],
     ) {
-        self.pad();
-        self.out.push_str("<table>\n");
+        self.line("<table>");
         self.indent += 1;
 
         let mut i = start;
@@ -301,40 +285,29 @@ impl<'a> Emitter<'a> {
             match &events[i].0 {
                 Event::Start(Tag::TableHead) => {
                     in_head = true;
-                    self.pad();
-                    self.out.push_str("<thead>\n");
+                    self.line("<thead>");
                     self.indent += 1;
-                    self.pad();
-                    self.out.push_str("<tr>\n");
+                    self.line("<tr>");
                     self.indent += 1;
                     col = 0;
-                    i += 1;
                 }
                 Event::End(TagEnd::TableHead) => {
                     self.indent -= 1;
-                    self.pad();
-                    self.out.push_str("</tr>\n");
+                    self.line("</tr>");
                     self.indent -= 1;
-                    self.pad();
-                    self.out.push_str("</thead>\n");
-                    self.pad();
-                    self.out.push_str("<tbody>\n");
+                    self.line("</thead>");
+                    self.line("<tbody>");
                     self.indent += 1;
                     in_head = false;
-                    i += 1;
                 }
                 Event::Start(Tag::TableRow) => {
-                    self.pad();
-                    self.out.push_str("<tr>\n");
+                    self.line("<tr>");
                     self.indent += 1;
                     col = 0;
-                    i += 1;
                 }
                 Event::End(TagEnd::TableRow) => {
                     self.indent -= 1;
-                    self.pad();
-                    self.out.push_str("</tr>\n");
-                    i += 1;
+                    self.line("</tr>");
                 }
                 Event::Start(Tag::TableCell) => {
                     let close = matching_end(events, i, end);
@@ -344,18 +317,17 @@ impl<'a> Emitter<'a> {
                     self.inlines(events, i + 1, close);
                     self.out.push_str(&format!("</{tag}>\n"));
                     col += 1;
-                    i = close + 1;
+                    i = close;
                 }
-                _ => i += 1,
+                _ => {}
             }
+            i += 1;
         }
 
         self.indent -= 1;
-        self.pad();
-        self.out.push_str("</tbody>\n");
+        self.line("</tbody>");
         self.indent -= 1;
-        self.pad();
-        self.out.push_str("</table>\n");
+        self.line("</table>");
     }
 
     fn inlines(&mut self, events: &[(Event, std::ops::Range<usize>)], start: usize, end: usize) {
@@ -387,7 +359,7 @@ impl<'a> Emitter<'a> {
                         None => {
                             for (e, _) in &events[i..j] {
                                 if let Event::Text(t) = e {
-                                    self.out.push_str(&escape_text(t));
+                                    self.out.push_str(&escape_html(t));
                                 }
                             }
                         }
@@ -406,7 +378,7 @@ impl<'a> Emitter<'a> {
                     let after_space = self.source[..range.start].chars().next_back().is_none_or(char::is_whitespace);
                     if let Some(span) = span.filter(|s| !s.starts_with("``") && after_space) {
                         if span[1..].starts_with(char::is_whitespace) {
-                            self.out.push_str(&escape_text(span));
+                            self.out.push_str(&escape_html(span));
                             i += 1;
                             continue;
                         }
@@ -476,7 +448,7 @@ impl<'a> Emitter<'a> {
                 Some('>') => out.push_str("&gt;"),
                 Some('&') => out.push_str("&amp;"),
                 Some(c) => out.push(c),
-                None => out.push_str(&escape_text(whole.as_str())),
+                None => out.push_str(&escape_html(whole.as_str())),
             }
             prev = Some(';');
             last = whole.end();
@@ -488,20 +460,15 @@ impl<'a> Emitter<'a> {
     fn plain_segment(&self, segment: &str, preceding: Option<char>) -> String {
         let unescaped = unescape_backslashes(segment);
         let text = if self.smart { smartify(&unescaped, preceding) } else { unescaped };
-        escape_text(&text)
+        escape_html(&text)
     }
 
     /// `Kramdown::Parser::GFM#generate_gfm_header_id`: downcase, drop
     /// everything that is not a word character, hyphen, space or tab, then
     /// turn spaces and tabs into hyphens. Repeats gain a numeric suffix.
     fn header_id(&mut self, text: &str) -> String {
-        let lowered = text.to_lowercase();
-        let stripped: String = lowered
-            .chars()
-            .filter(|c| is_word_char(*c) || *c == '-' || *c == ' ' || *c == '\t')
-            .collect();
-        let result: String =
-            stripped.chars().map(|c| if c == ' ' || c == '\t' { '-' } else { c }).collect();
+        static NOT_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^\w\- \t]").unwrap());
+        let result = NOT_ID.replace_all(&text.to_lowercase(), "").replace([' ', '\t'], "-");
 
         let counter = self.id_counts.entry(result.clone()).or_insert(-1);
         *counter += 1;
@@ -510,27 +477,6 @@ impl<'a> Emitter<'a> {
         } else {
             result
         }
-    }
-}
-
-/// Ruby's `\p{Word}`: letters, marks, digits and connector punctuation.
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || unicode_is_mark(c)
-}
-
-fn unicode_is_mark(c: char) -> bool {
-    // Combining marks occupy these ranges in practice for Latin text.
-    matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x20D0..=0x20FF)
-}
-
-fn heading_number(level: HeadingLevel) -> u8 {
-    match level {
-        HeadingLevel::H1 => 1,
-        HeadingLevel::H2 => 2,
-        HeadingLevel::H3 => 3,
-        HeadingLevel::H4 => 4,
-        HeadingLevel::H5 => 5,
-        HeadingLevel::H6 => 6,
     }
 }
 
@@ -607,13 +553,7 @@ fn blank_line_between(source: &str, prev_end: usize, next_start: usize) -> bool 
     source[content_end..next_start].matches('\n').count() >= 2
 }
 
-/// Kramdown text escaping: `<` and `>` and bare `&` become entities, but a
-/// well-formed entity reference is left intact and `"` stays literal.
-fn escape_text(s: &str) -> String {
-    escape_html(s)
-}
-
-/// Escaping inside `<pre>`/`<code>` blocks: `"` is left as written.
+/// Kramdown's text escaping: `<`, `>` and `&` become entities; `"` stays.
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
@@ -690,18 +630,16 @@ fn smartify(s: &str, preceding: Option<char>) -> String {
                 i += 2;
                 continue;
             }
-            '"' => {
-                // An opening quote follows whitespace or nothing.
+            '"' | '\'' => {
+                // An opening quote follows whitespace, an opening bracket, a
+                // dash, or nothing at all.
                 let opening = prev.is_none_or(|p| p.is_whitespace() || "([{-\u{2013}\u{2014}".contains(p));
-                out.push(if opening { '\u{201C}' } else { '\u{201D}' });
-                i += 1;
-                continue;
-            }
-            '\'' => {
-                let opening = prev.is_none_or(|p| p.is_whitespace() || "([{-\u{2013}\u{2014}".contains(p));
-                out.push(if opening { '\u{2018}' } else { '\u{2019}' });
-                i += 1;
-                continue;
+                out.push(match (c, opening) {
+                    ('"', true) => '\u{201C}',
+                    ('"', false) => '\u{201D}',
+                    (_, true) => '\u{2018}',
+                    (_, false) => '\u{2019}',
+                });
             }
             _ => out.push(c),
         }
