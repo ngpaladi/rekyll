@@ -23,7 +23,8 @@ $ ./tests/harness/all.sh
   [ OK ] 08-timezone        America/New_York, DST, unzoned dates
   [ OK ] 09-blank-template  Jekyll's own `jekyll new --blank` output
   [ OK ] 10-pages           page ordering and sequential content updates
-=== 10 passed, 0 failed ===
+  [ OK ] 11-docs            this project's own docs/ site
+=== 11 passed, 0 failed ===
 === MARKDOWN IDENTICAL ===
 === FILTERS IDENTICAL ===
 ```
@@ -31,9 +32,27 @@ $ ./tests/harness/all.sh
 ## Usage
 
 ```
-cargo build --release
-./target/release/rekyll build -s path/to/site -d path/to/_site
+cargo install --path . --locked
+rekyll build -s path/to/site -d path/to/_site
 ```
+
+`--locked` matters: `cargo install` otherwise re-resolves dependencies and
+picks a `kstring` that needs a newer rustc than this crate is built against.
+The result is one self-contained executable — no Ruby, no gems, nothing
+alongside it.
+
+## Docs
+
+`docs/` is a Jekyll site documenting rekyll, built by rekyll. It is also
+fixture 11, so it is byte-identical to Jekyll's build of the same tree by
+construction. To read it locally:
+
+```
+rekyll build -s docs -d docs/_site
+python3 -m http.server 4000 -d docs/_site   # http://127.0.0.1:4000
+```
+
+rekyll has no `serve` subcommand — that is a documented gap, not an oversight.
 
 ## What matches Jekyll exactly
 
@@ -160,6 +179,7 @@ The harnesses are the specification.
 |--------|---------------|
 | `tests/harness/all.sh` | everything below |
 | `tests/harness/diff.sh 08-timezone` | dates outside UTC — the most error-prone area |
+| `tests/harness/diff.sh 11-docs` | this project's own `docs/` site |
 | `tests/harness/diff.sh [fixture…]` | full `_site` trees, `jekyll build` vs `rekyll build` |
 | `tests/harness/md_diff.sh` | the Markdown corpus against kramdown 2.4 + GFM |
 | `tests/harness/filters_diff.sh` | filter expressions against Ruby Liquid 5.4 |
