@@ -101,13 +101,7 @@ impl Payload {
             Some(p) => p.clone(),
             None => return,
         };
-        let site = std::sync::Arc::make_mut(&mut self.site);
-        for path in &paths {
-            if let Some(LaxValue::Object(obj)) = follow_mut(site, path) {
-                obj.insert("content", LaxValue::str(rendered.content.clone()));
-                obj.insert("output", LaxValue::str(rendered.output.clone()));
-            }
-        }
+        self.patch(&paths, rendered, false);
     }
 
     /// Reflect a finished document everywhere it appears in the drop, so a
@@ -117,12 +111,17 @@ impl Payload {
             Some(p) => p.clone(),
             None => return,
         };
+        self.patch(&paths, rendered, true);
+    }
+
+    /// Write a finished render into every recorded copy of an object.
+    fn patch(&mut self, paths: &[Vec<Step>], rendered: &Rendered, with_excerpt: bool) {
         let site = std::sync::Arc::make_mut(&mut self.site);
-        for path in &paths {
-            if let Some(target) = follow_mut(site, path) {
-                if let LaxValue::Object(obj) = target {
-                    obj.insert("content", LaxValue::str(rendered.content.clone()));
-                    obj.insert("output", LaxValue::str(rendered.output.clone()));
+        for path in paths {
+            if let Some(LaxValue::Object(obj)) = follow_mut(site, path) {
+                obj.insert("content", LaxValue::str(rendered.content.clone()));
+                obj.insert("output", LaxValue::str(rendered.output.clone()));
+                if with_excerpt {
                     obj.insert("excerpt", LaxValue::str(rendered.excerpt.clone()));
                 }
             }
@@ -243,49 +242,63 @@ impl Renderer {
     }
 
     /// `Renderer#run` for a page: Liquid, then the converter, then layouts.
+    /// `Renderer#run`: Liquid, then the converter, then the layout chain.
+    /// Returns the converted content (which Jekyll assigns before layouts) and
+    /// the final output.
+    fn render_convertible(
+        &self,
+        site: &Site,
+        payload: &Payload,
+        data: &Object,
+        content: &str,
+        ext: &str,
+        relative_path: &str,
+        page_object: &Object,
+    ) -> Result<(String, String)> {
+        let mut payload = payload.root();
+        payload.insert("page", LaxValue::Object(LaxObject::from_value_object(page_object)));
+        payload.insert("paginator", LaxValue::Nil);
+
+        // `assign_layout_data!` seeds `layout` from the page's own layout.
+        payload.insert(
+            "layout",
+            match data.get("layout").and_then(Value::as_str).and_then(|n| site.layouts.get(n)) {
+                Some(l) => LaxValue::Object(LaxObject::from_value_object(&l.data)),
+                None => LaxValue::Nil,
+            },
+        );
+
+        let mut output = content.to_string();
+        if render_with_liquid(data, &output) {
+            output = self.render_liquid(&output, &payload, relative_path)?;
+        }
+        output = convert(site, ext, &output)
+            .with_context(|| format!("converting {relative_path}"))?;
+
+        let converted = output.clone();
+        if place_in_layout(data, ext) {
+            output = self.place_in_layouts(site, data, relative_path, output, &mut payload)?;
+        }
+        Ok((converted, output))
+    }
+
     pub fn render_page(
         &self,
         site: &Site,
         page: &Page,
         payload: &Payload,
     ) -> Result<(String, String)> {
-        let mut payload = payload.root();
-        payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&page_to_liquid(site, page))));
-        payload.insert("paginator", LaxValue::Nil);
-
-        // `assign_layout_data!` seeds `layout` from the page's own layout.
-        let layout_data = page
-            .data
-            .get("layout")
-            .and_then(Value::as_str)
-            .and_then(|n| site.layouts.get(n))
-            .map(|l| l.data.clone());
-        payload.insert(
-            "layout",
-            match &layout_data {
-                Some(d) => LaxValue::Object(LaxObject::from_value_object(d)),
-                None => LaxValue::Nil,
-            },
-        );
-
-        let mut output = page.content.clone();
-        if render_with_liquid(&page.data, &output) {
-            output = self.render_liquid(&output, &payload, &page.relative_path())?;
-        }
-
-        output = convert(site, page, &output)
-            .with_context(|| format!("converting {}", page.relative_path()))?;
-
-        // `page.content` becomes the converted text before layouts run.
-        let converted = output.clone();
-
-        if place_in_layout(&page.data, &page.ext) {
-            output = self.place_in_layouts(site, page, output, &mut payload)?;
-        }
-        Ok((converted, output))
+        self.render_convertible(
+            site,
+            payload,
+            &page.data,
+            &page.content,
+            &page.ext,
+            &page.relative_path(),
+            &page_to_liquid(site, page),
+        )
     }
 
-    /// `Renderer#run` for a collection document.
     pub fn render_document(
         &self,
         site: &Site,
@@ -294,44 +307,15 @@ impl Renderer {
         payload: &Payload,
         state: &RenderState,
     ) -> Result<(String, String)> {
-        let mut payload_root = payload.root();
-        let data = doc_to_liquid(site, collection, doc, state);
-        let payload = &mut payload_root;
-        #[allow(unused_mut)]
-        let mut payload = payload;
-        payload.insert("page", LaxValue::Object(LaxObject::from_value_object(&data)));
-        payload.insert("paginator", LaxValue::Nil);
-
-        let layout_data = doc
-            .data
-            .get("layout")
-            .and_then(Value::as_str)
-            .and_then(|n| site.layouts.get(n))
-            .map(|l| l.data.clone());
-        payload.insert(
-            "layout",
-            match &layout_data {
-                Some(d) => LaxValue::Object(LaxObject::from_value_object(d)),
-                None => LaxValue::Nil,
-            },
-        );
-
-        let mut output = doc.content.clone();
-        if render_with_liquid(&doc.data, &output) {
-            output = self.render_liquid(&output, &payload, &doc.relative_path)?;
-        }
-        if site.is_markdown(&doc.extname) {
-            output = crate::markdown::convert(site, &output);
-        }
-
-        // `document.content` is reassigned here, before layouts run.
-        let converted = output.clone();
-
-        if place_in_layout(&doc.data, &doc.extname) {
-            let page = pseudo_page(doc);
-            output = self.place_in_layouts(site, &page, output, &mut payload)?;
-        }
-        Ok((converted, output))
+        self.render_convertible(
+            site,
+            payload,
+            &doc.data,
+            &doc.content,
+            &doc.extname,
+            &doc.relative_path,
+            &doc_to_liquid(site, collection, doc, state),
+        )
     }
 
     /// `Jekyll::Excerpt`: the content up to `excerpt_separator`, rendered
@@ -368,29 +352,25 @@ impl Renderer {
         if render_with_liquid(&doc.data, &output) {
             output = self.render_liquid(&output, &payload, &doc.relative_path)?;
         }
-        if site.is_markdown(&doc.extname) {
-            output = crate::markdown::convert(site, &output);
-        }
-        Ok(output)
+        Ok(convert(site, &doc.extname, &output)?)
     }
 
     /// `Renderer#place_in_layouts`: walk the layout chain, stopping on a cycle.
     fn place_in_layouts(
         &self,
         site: &Site,
-        page: &Page,
+        data: &Object,
+        relative_path: &str,
         content: String,
         payload: &mut LaxObject,
     ) -> Result<String> {
         let mut output = content;
-        let mut name = page.data.get("layout").and_then(Value::as_str).map(str::to_string);
+        let mut name = data.get("layout").and_then(Value::as_str).map(str::to_string);
 
         if let Some(n) = &name {
             if !site.layouts.contains_key(n) {
                 eprintln!(
-                    "       Build Warning: Layout '{}' requested in {} does not exist.",
-                    n,
-                    page.relative_path()
+                    "       Build Warning: Layout '{n}' requested in {relative_path} does not exist."
                 );
             }
         }
@@ -440,27 +420,13 @@ fn place_in_layout(data: &Object, ext: &str) -> bool {
 }
 
 /// Run the matching converter over the content.
-fn convert(site: &Site, page: &Page, content: &str) -> Result<String> {
-    if site.is_markdown(&page.ext) {
+fn convert(site: &Site, ext: &str, content: &str) -> Result<String> {
+    if site.is_markdown(ext) {
         Ok(crate::markdown::convert(site, content))
-    } else if crate::site::is_sass(&page.ext) {
-        crate::sass::compile(site, content, page.ext == ".sass")
+    } else if crate::site::is_sass(ext) {
+        crate::sass::compile(site, content, ext == ".sass")
     } else {
         Ok(content.to_string())
-    }
-}
-
-/// A minimal `Page` standing in for a document, so the layout chain can be
-/// driven by one code path.
-fn pseudo_page(doc: &Document) -> Page {
-    Page {
-        dir: String::new(),
-        name: doc.relative_path.clone(),
-        basename: String::new(),
-        ext: doc.extname.clone(),
-        data: doc.data.clone(),
-        content: String::new(),
-        output: String::new(),
     }
 }
 
@@ -506,25 +472,6 @@ fn url_dir(url: &str) -> String {
         Some(i) => url[..=i].to_string(),
         None => "/".to_string(),
     }
-}
-
-/// The `UnifiedPayloadDrop`: site, jekyll, and the per-page slots.
-pub fn site_payload(site: &Site, state: &RenderState) -> LaxObject {
-    let mut root = LaxObject::new();
-    root.insert("site", LaxValue::Object(site_drop(site, state)));
-
-    let mut jekyll = LaxObject::new();
-    jekyll.insert("version", LaxValue::str(JEKYLL_VERSION));
-    jekyll.insert(
-        "environment",
-        LaxValue::str(std::env::var("JEKYLL_ENV").unwrap_or_else(|_| "development".into())),
-    );
-    root.insert("jekyll", LaxValue::Object(jekyll));
-
-    root.insert("content", LaxValue::Nil);
-    root.insert("layout", LaxValue::Nil);
-    root.insert("paginator", LaxValue::Nil);
-    root
 }
 
 /// `SiteDrop`: the configuration as fallback data, with the computed

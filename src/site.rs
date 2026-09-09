@@ -5,7 +5,7 @@
 use crate::config::{deep_merge, Config};
 use crate::defaults::Defaults;
 use crate::document::{
-    categories_from_path, date_filename_matcher, document_to_liquid, generate_url_from_drop,
+    categories_from_path, date_filename_matcher, generate_url_from_drop,
     pluralized, populate_title, Collection, Document, UrlDrop,
 };
 use crate::frontmatter;
@@ -736,13 +736,6 @@ pub fn join_path(a: &str, b: &str) -> String {
     }
 }
 
-/// Deep-merge helper re-exported for the renderer's layout data handling.
-pub fn merge(base: &Object, overlay: &Object) -> Object {
-    deep_merge(base, overlay)
-}
-
-#[allow(dead_code)]
-fn unused(_: &Value) {}
 
 fn parent_of(relative: &str) -> String {
     match relative.rfind('/') {

@@ -146,8 +146,4 @@ fn parse_offset(z: &str) -> Result<i32> {
     Ok(sign * (h * 3600 + m * 60))
 }
 
-/// Convert a YAML-resolved value into the string `Utils.parse_date` receives,
-/// which is `data["date"].to_s`.
-pub fn value_to_date_string(v: &crate::value::Value) -> String {
-    v.to_string()
-}
+

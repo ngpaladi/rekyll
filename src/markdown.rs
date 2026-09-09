@@ -105,7 +105,7 @@ impl<'a> Emitter<'a> {
         let mut prev_end: Option<usize> = None;
 
         while i < end {
-            let (event, range) = &events[i];
+            let (_, range) = &events[i];
             if let Some(pe) = prev_end {
                 if pe <= range.start && blank_line_between(self.source, pe, range.start) {
                     self.out.push('\n');
@@ -381,7 +381,7 @@ impl<'a> Emitter<'a> {
                 Event::Code(c) => {
                     self.out.push_str(&format!(
                         "<code class=\"language-{DEFAULT_LANG} highlighter-rouge\">{}</code>",
-                        escape_html_code_span(c)
+                        escape_html(c)
                     ));
                 }
                 Event::Html(h) | Event::InlineHtml(h) => {
@@ -576,28 +576,12 @@ fn blank_line_between(source: &str, prev_end: usize, next_start: usize) -> bool 
 /// Kramdown text escaping: `<` and `>` and bare `&` become entities, but a
 /// well-formed entity reference is left intact and `"` stays literal.
 fn escape_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let bytes: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            c => out.push(c),
-        }
-        i += 1;
-    }
-    out
+    escape_html(s)
 }
 
 /// Escaping inside `<pre>`/`<code>` blocks: `"` is left as written.
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-}
-
-fn escape_html_code_span(s: &str) -> String {
-    escape_html(s)
 }
 
 fn escape_attr(s: &str) -> String {

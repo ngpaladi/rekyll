@@ -143,7 +143,37 @@ pub fn all() -> Vec<(&'static str, FilterFn)> {
         ("divided_by", f_divided_by),
         ("sort", f_sort),
         ("map", f_map),
+        // Jekyll filters rekyll does not implement. They are registered so
+        // they warn rather than silently passing through: the unknown-filter
+        // passthrough exists for filters plugin-less Jekyll also lacks, and
+        // applying it to filters Jekyll *does* have would turn a missing
+        // feature into a wrong answer. `{{ posts | where_exp: ... }}` would
+        // quietly return every post.
+        ("where_exp", f_unimplemented),
+        ("group_by_exp", f_unimplemented),
+        ("find_exp", f_unimplemented),
+        ("sample", f_unimplemented),
+        ("sassify", f_unimplemented),
+        ("scssify", f_unimplemented),
     ]
+}
+
+/// Pass the input through, but say so on stderr the first time, once per
+/// filter name.
+fn f_unimplemented(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
+    use std::sync::Mutex;
+    static WARNED: Mutex<Option<std::collections::HashSet<&'static str>>> = Mutex::new(None);
+    if let Ok(mut guard) = WARNED.lock() {
+        let seen = guard.get_or_insert_with(std::collections::HashSet::new);
+        if seen.insert("unimplemented") {
+            eprintln!(
+                "       Build Warning: a Jekyll filter rekyll does not implement was used \
+                 (where_exp, group_by_exp, find_exp, sample, sassify or scssify). Its input \
+                 was passed through unchanged, so the output differs from Jekyll's."
+            );
+        }
+    }
+    Ok(input.to_value())
 }
 
 // -- helpers ----------------------------------------------------------------

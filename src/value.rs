@@ -24,13 +24,6 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Value::Str(s) => Some(s),
-            _ => None,
-        }
-    }
-
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -38,9 +31,9 @@ impl Value {
         }
     }
 
-    pub fn as_i64(&self) -> Option<i64> {
+    pub fn as_str(&self) -> Option<&str> {
         match self {
-            Value::Int(i) => Some(*i),
+            Value::Str(s) => Some(s),
             _ => None,
         }
     }
@@ -78,14 +71,6 @@ impl Value {
     /// are truthy, which Liquid inherits.
     pub fn truthy(&self) -> bool {
         !matches!(self, Value::Null | Value::Bool(false))
-    }
-
-    pub fn object(pairs: Vec<(&str, Value)>) -> Value {
-        let mut o = Object::new();
-        for (k, v) in pairs {
-            o.insert(k.to_string(), v);
-        }
-        Value::Object(o)
     }
 
     pub fn str(s: impl Into<String>) -> Value {
