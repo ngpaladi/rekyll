@@ -18,3 +18,5 @@ pub mod tags;
 pub mod urlfilters;
 pub mod filters;
 pub mod sass;
+#[cfg(feature = "serve")]
+pub mod serve;

@@ -1,8 +1,10 @@
 - name: Overview
   url: /
-- name: Fidelity
-  url: /fidelity/
-- name: Vendored Liquid
-  url: /vendor/
+- name: Features
+  url: /features/
+- name: Limits
+  url: /limits/
 - name: Testing
   url: /testing/
+- name: Liquid patches
+  url: /vendor/

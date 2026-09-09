@@ -1,44 +1,61 @@
 ---
 title: rekyll
-summary: A from-scratch Jekyll reimplementation in Rust that produces byte-identical output from identical input.
 ---
 
-This site is built by rekyll, from the sources in `docs/`. It is also
-[a test fixture](/testing/): the same tree is built by real Jekyll on every
-run and the two `_site` trees are compared byte for byte. If they ever differ,
-the build fails.
+Jekyll, but make it Rust. A static site generator that reads a Jekyll site and
+writes the same `_site` Jekyll 4.3.2 would, byte for byte.
 
-## The guarantee, stated precisely
+It is not plugin-compatible. It is output-compatible.
 
-**Identical input produces identical output**, byte for byte, against Jekyll
-4.3.2 — for the feature set listed under [Fidelity](/fidelity/). rekyll is not
-plugin-compatible. It is *output*-compatible.
+## What it does
 
-{% include verdict.html state="identical" text="10 site fixtures, a Markdown corpus against kramdown 2.4, and ~100 filter expressions against Ruby Liquid 5.4." %}
+- Builds any Jekyll site that uses core Jekyll features, with byte-identical output.
+- Reads `_config.yml` with Ruby's YAML 1.1 rules, so `yes` is a boolean and `010` is octal.
+- Handles pages, posts, custom collections, layouts, includes and `_data`.
+- Renders Liquid, including Jekyll's filters and the `include`, `include_relative`, `link`, `post_url` and `highlight` tags.
+- Converts Markdown to match kramdown 2.4 in GFM mode.
+- Compiles Sass and SCSS in libsass `:compact` style.
+- Resolves dates in the site timezone, including DST and unzoned front matter.
+- Serves the built site with `rekyll serve`, for previewing.
+- Ships as one self-contained binary. No Ruby, no gems.
 
-Correctness here is measured rather than asserted. Jekyll is installed
-alongside, and every layer is diffed against the real implementation instead of
-against what the implementation was assumed to do. That distinction found
-things that were not guessable:
+## Requirements
 
-- Ruby's YAML is **1.1**, so `yes` is a boolean and `010` is octal — but
-  `1e3` is a *string*.
-- The first working version was **not deterministic**: it produced different
-  output from the same input on consecutive runs.
-- Under a non-UTC timezone, an unzoned `date:` **shifts the permalink** by a
-  day.
+- Rust 1.94 or newer to build.
+- Nothing at runtime.
+- Jekyll 4.3.2 only if you want to run the differential tests.
 
-Each has a note below.
-
-## Using it
+## Install
 
 ```
 cargo install --path . --locked
+```
+
+Use `--locked`. Without it `cargo install` re-resolves dependencies and picks a
+`kstring` that needs a newer rustc.
+
+## Usage
+
+```
 rekyll build -s path/to/site -d path/to/_site
 ```
 
-One self-contained executable. No Ruby, no gems, nothing to install alongside
-it.
+Both flags are optional. `-s` defaults to the current directory, `-d` to
+`<source>/_site`.
+
+To build and preview in one step:
+
+```
+rekyll serve -s docs -d docs/_site
+```
+
+Defaults to `http://127.0.0.1:4000`, the same as Jekyll. Override with `-H`
+and `-P`. Pass `--skip-initial-build` to serve an existing `_site` without
+rebuilding.
+
+The server is a preview server. It does not watch or rebuild, and it is not
+meant to face a network. Build it out with `--no-default-features` if you want
+a build-only binary.
 
 ## Speed
 
@@ -48,12 +65,3 @@ Same machine, same generated site, identical output at both sizes.
 |-------|--------------|--------|
 | 302   | 0.58s        | 0.17s  |
 | 1202  | 1.43s        | 0.66s  |
-
-The first version was 16× *slower* than Jekyll. Profiling, not intuition,
-found why.
-
-## Notes
-
-{% for post in site.posts %}
-- [{{ post.title }}]({{ post.url | relative_url }}) — {{ post.summary }}
-{% endfor %}

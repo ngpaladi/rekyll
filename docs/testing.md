@@ -1,60 +1,69 @@
 ---
 title: Testing
-summary: The harnesses are the specification. Nothing is asserted that isn't diffed.
 ---
 
-Jekyll 4.3.2 is installed alongside rekyll, so every layer is compared against
-the real implementation rather than against expectations. The harness was
-written **before** any generator code.
+Jekyll 4.3.2 is installed alongside rekyll, and every layer is diffed against
+it. Nothing is asserted that is not diffed.
+
+## Requirements
+
+- `jekyll` 4.3.2 on `PATH`.
+- `ruby` with `kramdown`, `kramdown-parser-gfm` and `liquid`.
+
+## Run everything
 
 ```
 ./tests/harness/all.sh
 ```
 
-| script | what it diffs |
-|--------|---------------|
-| `diff.sh [fixture…]` | full `_site` trees, `jekyll build` vs `rekyll build` |
-| `md_diff.sh` | the Markdown corpus against kramdown 2.4 + GFM |
-| `filters_diff.sh` | ~100 filter expressions against Ruby Liquid 5.4 |
-| `all.sh` | all of the above |
+## Run one thing
+
+```
+./tests/harness/diff.sh                # all site fixtures
+./tests/harness/diff.sh 08-timezone    # one fixture
+./tests/harness/md_diff.sh             # Markdown corpus
+./tests/harness/filters_diff.sh        # filter corpus
+```
+
+`diff.sh` builds each fixture with `jekyll build` and with `rekyll build`, then
+compares the two `_site` trees with `diff -r`. Set `REKYLL_WORK` to change
+where builds land, `REKYLL_BIN` to test a different binary.
 
 ## Fixtures
 
-Each was written to probe an untested surface, not to confirm behaviour that
-already worked.
-
 | fixture | covers |
 |---------|--------|
-| `01-static` | static files, include/exclude rules |
+| `01-static` | static files, include and exclude rules |
 | `02-page-layout` | layouts, layout chains, CRLF front matter |
 | `03-posts` | permalinks, categories, tags, publishing |
 | `04-includes` | includes, collections, defaults, link tags |
 | `05-sass` | Sass, libsass `:compact` output |
 | `06-highlight` | the `highlight` tag, with and without `linenos` |
-| `07-blog` | a realistic blog: markdown, excerpts, an Atom feed |
+| `07-blog` | markdown posts, excerpts, an Atom feed |
 | `08-timezone` | `America/New_York`, DST, unzoned dates |
-| `09-blank-template` | Jekyll's own `jekyll new --blank` output |
+| `09-blank-template` | `jekyll new --blank` output, unmodified |
 | `10-pages` | page ordering, sequential content updates |
 | `11-docs` | this site |
 
 Fixtures pin `timezone` and `time` in `_config.yml`. Without that, Jekyll's own
-output depends on the wall clock and the local timezone, and the diff chases
-phantoms.
+output depends on the wall clock and the local timezone.
 
-## Two more differentials
+## Adding a fixture
 
-Kept from development, because they pin down rules that are dense and easy to
-get subtly wrong:
+1. Create `tests/fixtures/NN-name/` with a `_config.yml` that pins `timezone` and `time`.
+2. Run `./tests/harness/diff.sh NN-name`.
+3. If it fails, the diff shows both trees.
 
-- `examples/scalars.rs` against `psych_ref.rb` — 52 YAML scalars.
-- `examples/strftime_dump.rs` against `strftime_ref.rb` — 18 format strings
-  across 4 timezone-varied times.
+## Scalar and date differentials
 
-## The fixture that mattered most
+Two extra differentials cover rules that are dense and easy to get wrong:
 
-`08-timezone` is the one that would have caught the most real-world breakage,
-and everything before it was UTC. It is highly discriminating: under
-`America/New_York`, a post with `date: 2020-01-02 03:04:05` publishes at
-`/2020/01/01/`, because Psych reads an unzoned time as a UTC instant that
-`Time#localtime` then shifts. A generator that got this wrong would put posts
-on the wrong day and never notice under UTC.
+```
+ruby tests/harness/psych_ref.rb tests/harness/scalars.txt
+cargo run --example scalars tests/harness/scalars.txt
+
+ruby tests/harness/strftime_ref.rb tests/harness/strftime_fmts.txt
+cargo run --example strftime_dump tests/harness/strftime_fmts.txt
+```
+
+Diff the two outputs of each pair.

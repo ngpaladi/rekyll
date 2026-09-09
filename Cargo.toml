@@ -5,6 +5,12 @@ edition = "2021"
 description = "Jekyll, but make it Rust"
 license = "MIT"
 
+[features]
+# The preview server is built in by default. It adds no dependencies; disable
+# it with --no-default-features for a build-only binary.
+default = ["serve"]
+serve = []
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "alloc"] }

@@ -48,11 +48,12 @@ fixture 11, so it is byte-identical to Jekyll's build of the same tree by
 construction. To read it locally:
 
 ```
-rekyll build -s docs -d docs/_site
-python3 -m http.server 4000 -d docs/_site   # http://127.0.0.1:4000
+rekyll serve -s docs -d docs/_site          # http://127.0.0.1:4000
 ```
 
-rekyll has no `serve` subcommand — that is a documented gap, not an oversight.
+`serve` is a default Cargo feature that adds no dependencies; build with
+`--no-default-features` for a build-only binary. It is a preview server: it
+does not watch or rebuild, and it is not meant to face a network.
 
 ## What matches Jekyll exactly
 
@@ -117,7 +118,7 @@ covered by fixture 09.
 
 **Also not implemented**: drafts (`_drafts`), pagination, `where_exp` /
 `group_by_exp` / `sample`, `site.related_posts`, CoffeeScript, TOML config,
-non-YAML data files, incremental builds, and `serve`/`watch`.
+non-YAML data files, incremental builds, and watch/livereload.
 
 ## Determinism
 
