@@ -2,59 +2,68 @@
 title: Features
 ---
 
-Everything on this page is verified byte-identical against Jekyll 4.3.2. See
+Everything here is checked byte-for-byte against Jekyll 4.3.2. See
 [Testing](/testing/) for how.
 
 ## Configuration
 
-- Reads `_config.yml` and `_config.yaml`.
-- Applies Jekyll's full `DEFAULTS` set and deep-merge semantics.
-- Resolves scalars with Ruby's YAML 1.1 rules. `yes`/`on` are booleans, `010` is octal, `1_000` and `1,000` are 1000, `1e3` is a string.
-- Never type-resolves quoted scalars.
-- Supports `collections`, `defaults`, `include`, `exclude`, `keep_files`, `permalink`, `timezone`, `time`, `future`, `unpublished`, `excerpt_separator`, `markdown_ext`, `baseurl`, `url`.
+rekyll reads `_config.yml` or `_config.yaml` and applies the same `DEFAULTS`
+Jekyll does, merged the same way. Your scalars get resolved under Ruby's YAML
+1.1 rules, not 1.2, which is a bigger deal than it sounds: `yes` and `on` are
+booleans, `010` is octal, `1_000` and `1,000` both come out as 1000, and `1e3`
+is a string, because the float pattern wants a decimal point in it. Anything
+you quote is left alone as a string.
+
+Keys you can use include `collections`, `defaults`, `include`, `exclude`,
+`keep_files`, `permalink`, `timezone`, `time`, `future`, `unpublished`,
+`excerpt_separator`, `markdown_ext`, `baseurl` and `url`.
 
 ## Content
 
-- Pages with and without front matter.
-- Posts from `_posts` in any directory, including nested ones like `blog/_posts`.
-- Custom collections, with `output` and `permalink` per collection.
-- Static files, including files inside a collection.
-- `_data` directory as `.yml` and `.yaml`, nested by subdirectory.
-- CRLF and LF sources.
+Pages work with or without front matter, and posts come from `_posts` in any
+directory, so `blog/_posts` is fine too. Custom collections get their own
+`output` and `permalink` settings. Static files are copied across, and if one
+lives inside a collection it goes wherever that collection's URL template puts
+it. Your `_data` folder is read as `.yml` and `.yaml`, nested by subdirectory.
+CRLF and LF line endings both work.
 
 ## Permalinks
 
-- All five built-in styles: `none`, `date`, `ordinal`, `pretty`, `weekdate`.
-- Custom templates with every `UrlDrop` placeholder, including `:year`, `:month`, `:day`, `:i_month`, `:short_month`, `:y_day`, `:week`, `:short_day`, `:categories`, `:slug`, `:title`, `:name`, `:collection`, `:path`, `:output_ext`.
-- Per-document `permalink` in front matter.
-- Categories taken from directory path.
+All five built-in styles work: `none`, `date`, `ordinal`, `pretty` and
+`weekdate`. If you write your own template you get every `UrlDrop` placeholder,
+including
+`:year`, `:month`, `:day`, `:i_month`, `:short_month`, `:y_day`, `:week`,
+`:short_day`, `:categories`, `:slug`, `:title`, `:name`, `:collection`, `:path`
+and `:output_ext`. A `permalink` in front matter beats the template, and any
+directories between the collection root and the file turn into categories.
 
 ## Dates
 
-- Filename dates and front-matter dates.
-- Resolves in the site timezone the way `Time.parse(...).localtime` does.
-- Handles zoned, unzoned and date-only values, plus DST gaps.
-- `future` and `published` filtering.
+Dates come from the filename or from front matter, and either way they resolve
+the way `Time.parse(...).localtime` does, in your site's timezone. Zoned,
+unzoned and date-only values all work, and so do daylight saving gaps. The
+`future` and `published` settings decide what actually gets written.
 
-## Layouts and includes
+Worth knowing, because it surprised me: if your timezone is
+`America/New_York` and you write `date: 2020-01-02 03:04:05` with no zone on
+it, the post publishes at `/2020/01/01/`. Ruby's YAML parser reads an unzoned
+time as a UTC instant, and `localtime` then drags it back to the previous
+evening. rekyll does the same thing, so your posts land where Jekyll would put
+them.
 
-- Layout chains, nested layout data merging, `layout: none`.
-- `{% raw %}{% include %}{% endraw %}` with quoted, unquoted and variable parameters.
-- `{% raw %}{% include_relative %}{% endraw %}`, resolved against the including file's directory.
-- `{% raw %}{% link %}{% endraw %}` and `{% raw %}{% post_url %}{% endraw %}`.
-- `{% raw %}{% highlight %}{% endraw %}`, with and without `linenos`.
-- Front-matter `defaults` with Jekyll's scope precedence.
+## Layouts And Includes
 
-## Liquid
-
-- Undefined variables render empty, matching `strict_variables: false`.
-- Unknown filters pass their input through, matching `strict_filters: false`.
-- Hash iteration order matches Ruby's insertion order.
-- Floats render Ruby-style, so `1.5 | plus: 1.5` gives `3.0`.
+Layout chains work, along with nested layout data merging and `layout: none`.
+The `include` tag takes quoted, unquoted and variable parameters, and
+`include_relative` resolves against the directory of whatever file is doing the
+including. The `link` and `post_url` tags turn a source path into its output
+URL with your baseurl on the front. The `highlight` tag works with and without
+`linenos`. Front-matter `defaults` follow Jekyll's precedence, where a longer
+scope path wins and a typed scope breaks a tie.
 
 ## Filters
 
-Jekyll's own:
+Jekyll's own filters:
 
 `slugify`, `xml_escape`, `cgi_escape`, `uri_escape`, `number_of_words`,
 `array_to_sentence_string`, `jsonify`, `to_integer`, `inspect`,
@@ -63,33 +72,46 @@ Jekyll's own:
 `absolute_url`, `strip_index`, `push`, `pop`, `shift`, `unshift`, `where`,
 `group_by`, `find`
 
-Standard Liquid filters overridden to match Ruby's behaviour:
+Standard Liquid filters that had to be overridden because Ruby does something
+different:
 
 `date`, `escape`, `escape_once`, `url_encode`, `url_decode`, `capitalize`,
 `split`, `divided_by`, `sort`, `map`
 
-The rest of the Liquid standard library comes from the `liquid` crate.
+Ruby's `escape` gives you `&#39;` where liquid-rust gives `&#x27;`,
+`url_encode` turns a space into `+`, `capitalize` downcases everything after
+the first letter, `split` throws away trailing empty fields, and dividing two
+integers stays an integer, so `3 | divided_by: 2` is 1. Floats print Ruby-style
+too, which is why `1.5 | plus: 1.5` is `3.0` and not `3`. Everything else in
+the Liquid standard library comes from the `liquid` crate as-is.
 
 ## Markdown
 
-Matches kramdown 2.4 with `kramdown-parser-gfm` under Jekyll's options.
+Markdown goes through an emitter written to match kramdown 2.4 with
+`kramdown-parser-gfm` under Jekyll's options. Blocks get indented two spaces
+per nesting level, and blank lines in your source come out as newlines between
+blocks. Kramdown does both of those and no Rust Markdown crate does, which is
+why the emitter exists. Void elements are XHTML, so raw HTML gets rewritten to
+`<img ... />`. Headers get GFM ids, with `-1` and `-2` on the end if you repeat
+one. Code blocks get Rouge's wrapper, and inline code carries the
+`language-plaintext` class that Jekyll's `default_lang` puts there.
 
-- Two-space indentation per block nesting level.
-- Source blank lines preserved as newlines between blocks.
-- XHTML void elements, including raw HTML rewritten to `<img ... />`.
-- GFM header ids, with `-1`/`-2` suffixes for repeats.
-- Rouge's code wrapper, and the `language-plaintext` class on inline code.
-- `entity_output: as_char` across the full HTML4 named entity set.
-- Smart quotes, dashes, ellipses and guillemets, including the non-breaking space kramdown binds to guillemets.
-- Tables with alignment, footnotes, strikethrough.
+Entities turn into real characters across the whole HTML4 named set, so
+`&rarr;` and `&frac12;` work and not just the common ones. Typography covers
+smart quotes, dashes, ellipses and guillemets, down to the non-breaking space
+kramdown sticks next to a guillemet. Tables with alignment, footnotes and
+strikethrough all work.
 
 ## Sass
 
-- `.scss` and `.sass` sources with front matter.
-- `_sass` load path, plus `sass.load_paths`.
-- libsass `:compact` output, which is jekyll-sass-converter's default. `expanded` and `compressed` also work.
+Both `.scss` and `.sass` build, with front matter, using `_sass` as the load
+path plus whatever you put in `sass.load_paths`. You get libsass `:compact`
+output by default, since that's what jekyll-sass-converter produces under
+sassc. Set `sass.style` to `expanded` or `compressed` if you'd rather.
 
 ## Excerpts
 
-- Content up to `excerpt_separator`, per-document or site-wide.
-- Appends the link reference definitions the excerpt refers to, so `[text][ref]` still resolves.
+An excerpt is everything up to `excerpt_separator`, which you can set per post
+or site-wide. Any Markdown link reference definitions the excerpt points at get
+appended to it, so a `[text][ref]` still resolves once the rest of the post has
+been cut off.
