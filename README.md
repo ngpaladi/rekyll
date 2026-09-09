@@ -192,22 +192,24 @@ Requires `jekyll` (4.3.2) on `PATH`. Fixtures pin `timezone` and `time` in
 `_config.yml`, without which Jekyll's own output depends on the wall clock and
 the local timezone.
 
-Two further differentials were used while building and are kept for
-regression: `examples/scalars.rs` against `tests/harness/psych_ref.rb`, and
-`examples/strftime_dump.rs` against `tests/harness/strftime_ref.rb`.
+Two smaller differentials run as part of the suite too
+(`tests/harness/units_diff.sh`): `examples/scalars.rs` against
+`tests/harness/psych_ref.rb`, and `examples/strftime_dump.rs` against
+`tests/harness/strftime_ref.rb`.
 
 ## Layout
 
 ```
 src/yaml.rs       YAML 1.1 scalar resolution, ported from Psych
 src/config.rs     Jekyll's DEFAULTS and merge order
-src/site.rs       reading, entry filtering, URLs, destinations
+src/site.rs       reading, front matter, entry filtering, URLs, destinations
 src/document.rs   collections, posts, permalink placeholders
+src/url.rs        permalink escaping, relative_url/absolute_url, slugify
 src/render.rs     payload assembly, layout chain, excerpts
 src/lax.rs        Liquid values with Jekyll's lax lookup semantics
 src/markdown.rs   Kramdown-compatible emitter over pulldown-cmark
 src/filters.rs    Jekyll's filters and Ruby-behaviour overrides
-src/strftime.rs   Ruby's Time#strftime
+src/time.rs       Ruby Time semantics; strftime via the strftime-ruby crate
 src/sass.rs       Sass via grass, reformatted to libsass :compact
 ```
 

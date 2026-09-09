@@ -1,6 +1,7 @@
 //! Mirrors tests/harness/strftime_ref.rb so the two outputs can be diffed.
 
 use chrono::{FixedOffset, TimeZone};
+use rekyll::time::RTime;
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage: strftime_dump <file>");
@@ -12,8 +13,10 @@ fn main() {
         FixedOffset::east_opt(0).unwrap().with_ymd_and_hms(1999, 7, 4, 0, 0, 0).unwrap(),
     ];
     for fmt in text.lines() {
-        for (i, t) in times.iter().enumerate() {
-            println!("{i}\t{fmt}\t{}", rekyll::strftime::strftime(t, fmt));
+        for (i, at) in times.iter().enumerate() {
+            // Ruby's `Time.new(..., offset)` has no zone name, so `%Z` is "".
+            let t = RTime { at: *at, zone: None };
+            println!("{i}\t{fmt}\t{}", t.format(fmt));
         }
     }
 }

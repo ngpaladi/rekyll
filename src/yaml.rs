@@ -230,6 +230,9 @@ struct Loader {
     /// Anchor ids for containers that are open but not yet finished; the id
     /// arrives at the start event, the finished value only at the end.
     open_anchors: Vec<usize>,
+    /// Psych refuses to build a Symbol under `safe_load`, so `:name` fails a
+    /// Jekyll build. Remembered here because the event callback cannot fail.
+    symbol: Option<String>,
 }
 
 impl Loader {
@@ -280,6 +283,9 @@ impl MarkedEventReceiver for Loader {
     fn on_event(&mut self, ev: Event, _mark: Marker) {
         match ev {
             Event::Scalar(text, style, anchor, tag) => {
+                if style == TScalarStyle::Plain && tag.is_none() && text.len() > 1 && text.starts_with(':') {
+                    self.symbol.get_or_insert(text.to_string());
+                }
                 let v = resolve_scalar(&text, style, tag.as_ref());
                 self.push(v, anchor);
             }
@@ -329,5 +335,8 @@ pub fn load(src: &str) -> Result<Value> {
     Parser::new_from_str(src)
         .load(&mut loader, true)
         .map_err(|e| anyhow!("YAML parse error: {e}"))?;
+    if let Some(sym) = loader.symbol {
+        return Err(anyhow!("Tried to load unspecified class: Symbol ({sym})"));
+    }
     Ok(loader.docs.into_iter().next().unwrap_or(Value::Null))
 }

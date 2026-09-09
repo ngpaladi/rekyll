@@ -4,7 +4,6 @@
 //! and `drops/url_drop.rb`.
 
 use crate::config::deep_merge;
-use crate::slug::{slugify, titleize_slug};
 use crate::time::RTime;
 use crate::url;
 use crate::value::{Object, Value};
@@ -116,22 +115,22 @@ impl UrlDrop {
             Value::str(doc.cleaned_relative_path(&collection.relative_directory())),
         );
         v.insert("output_ext".into(), Value::str(output_ext.to_string()));
-        v.insert("name".into(), Value::str(slugify(&basename, "default", false)));
+        v.insert("name".into(), Value::str(url::slugify(&basename, "default", false)));
 
         // `title` prefers an explicit `slug:`, in pretty mode preserving case.
         let slug_source = doc.data.get("slug").and_then(Value::as_str);
         v.insert(
             "title".into(),
             Value::str(match slug_source {
-                Some(s) => slugify(s, "pretty", true),
-                None => slugify(&basename, "pretty", true),
+                Some(s) => url::slugify(s, "pretty", true),
+                None => url::slugify(&basename, "pretty", true),
             }),
         );
         v.insert(
             "slug".into(),
             Value::str(match slug_source {
-                Some(s) => slugify(s, "default", false),
-                None => slugify(&basename, "default", false),
+                Some(s) => url::slugify(s, "default", false),
+                None => url::slugify(&basename, "default", false),
             }),
         );
 
@@ -140,7 +139,7 @@ impl UrlDrop {
         v.insert("categories".into(), Value::str(join_unique(cats.iter().map(|c| c.to_lowercase()))));
         v.insert(
             "slugified_categories".into(),
-            Value::str(join_unique(cats.iter().map(|c| slugify(c, "default", false)))),
+            Value::str(join_unique(cats.iter().map(|c| url::slugify(c, "default", false)))),
         );
 
         let d = &doc.date;
@@ -256,7 +255,7 @@ pub fn populate_title(data: &mut Object, relative_path: &str, basename_without_e
     let slug = slug.trim_end_matches('.').to_string();
 
     if !data.contains_key("title") || !data["title"].truthy() {
-        data.insert("title".into(), Value::str(titleize_slug(&slug)));
+        data.insert("title".into(), Value::str(url::titleize_slug(&slug)));
     }
     if !data.contains_key("slug") || !data["slug"].truthy() {
         data.insert("slug".into(), Value::str(slug));

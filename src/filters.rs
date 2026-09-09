@@ -10,6 +10,7 @@ use crate::lax::{LaxObject, LaxValue};
 use crate::time::RTime;
 use crate::value::Value as RValue;
 use chrono_tz::Tz;
+use liquid::model::Value as LValue;
 use liquid_core::parser::{FilterArguments, ParameterReflection};
 use liquid_core::{
     Error, Expression, Filter, FilterReflection, ParseFilter, Result, Runtime, Value, ValueView,
@@ -363,14 +364,14 @@ fn number_to_value(x: f64) -> Value {
 }
 
 fn to_rvalue(v: &dyn ValueView) -> RValue {
-    crate::liquid_bridge::from_liquid(&v.to_value())
+    from_liquid(&v.to_value())
 }
 
 // -- Jekyll filters ---------------------------------------------------------
 
 fn f_slugify(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let mode = arg_str(args, 0).unwrap_or_else(|| "default".into());
-    Ok(Value::scalar(crate::slug::slugify(&s(input), &mode, false)))
+    Ok(Value::scalar(crate::url::slugify(&s(input), &mode, false)))
 }
 
 fn f_xml_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
@@ -676,21 +677,21 @@ fn f_relative_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn R
     if input.is_nil() {
         return Ok(Value::Nil);
     }
-    Ok(Value::scalar(crate::urlfilters::relative_url(&s(input), &c.baseurl)))
+    Ok(Value::scalar(crate::url::relative_url(&s(input), &c.baseurl)))
 }
 
 fn f_absolute_url(input: &dyn ValueView, _a: &[Value], c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     if input.is_nil() {
         return Ok(Value::Nil);
     }
-    Ok(Value::scalar(crate::urlfilters::absolute_url(&s(input), &c.url, &c.baseurl)))
+    Ok(Value::scalar(crate::url::absolute_url(&s(input), &c.url, &c.baseurl)))
 }
 
 fn f_strip_index(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     if input.is_nil() {
         return Ok(Value::Nil);
     }
-    Ok(Value::scalar(crate::urlfilters::strip_index(&s(input))))
+    Ok(Value::scalar(crate::url::strip_index(&s(input))))
 }
 
 // -- arrays -----------------------------------------------------------------
@@ -875,7 +876,7 @@ fn f_split(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runti
 /// floating point.
 fn f_divided_by(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
     let a = to_rvalue(input);
-    let b = args.first().map(|v| crate::liquid_bridge::from_liquid(v)).unwrap_or(RValue::Int(1));
+    let b = args.first().map(|v| from_liquid(v)).unwrap_or(RValue::Int(1));
     let both_int = matches!(a, RValue::Int(_)) && matches!(b, RValue::Int(_));
     let (x, y) = (numeric(&a), numeric(&b));
     if y == 0.0 {
@@ -921,4 +922,32 @@ fn grouped_array(pairs: impl Iterator<Item = (Value, String)>) -> Value {
         })
         .collect();
     Value::Array(out)
+}
+
+/// A Liquid value as a rekyll `Value`, for filters that reuse site code.
+fn from_liquid(v: &LValue) -> RValue {
+    match v {
+        LValue::Nil | LValue::State(_) => RValue::Null,
+        LValue::Scalar(s) => {
+            // Order matters: a scalar holding "1" answers to_integer, so ask
+            // for the narrowest type first and fall back to the source text.
+            if let Some(b) = s.to_bool() {
+                RValue::Bool(b)
+            } else if let Some(i) = s.to_integer() {
+                RValue::Int(i)
+            } else if let Some(f) = s.to_float() {
+                RValue::Float(f)
+            } else {
+                RValue::Str(s.to_kstr().to_string())
+            }
+        }
+        LValue::Array(a) => RValue::Array(a.iter().map(from_liquid).collect()),
+        LValue::Object(o) => {
+            let mut out = crate::value::Object::new();
+            for (k, v) in o.iter() {
+                out.insert(k.to_string(), from_liquid(v));
+            }
+            RValue::Object(out)
+        }
+    }
 }

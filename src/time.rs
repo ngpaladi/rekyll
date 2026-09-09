@@ -7,7 +7,7 @@
 //! date-based permalinks — depend on it.
 
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Offset, TimeZone};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike};
 use chrono_tz::{OffsetName, Tz};
 use regex::Regex;
 use std::sync::OnceLock;
@@ -20,8 +20,11 @@ pub struct RTime {
 }
 
 impl RTime {
+    /// Ruby's `Time#strftime` (the `strftime-ruby` crate reproduces its
+    /// flags: `%-d`, `%^b`, `%_H`, widths). Ruby raises on a bad format and
+    /// Liquid does not rescue it, so a build fails there too.
     pub fn format(&self, fmt: &str) -> String {
-        crate::strftime::strftime_zoned(&self.at, fmt, self.zone.as_deref())
+        strftime::string::strftime(self, fmt).unwrap_or_else(|e| panic!("invalid date format {fmt:?}: {e}"))
     }
 
     /// Ruby's `Time#to_s`.
@@ -147,3 +150,21 @@ fn parse_offset(z: &str) -> Result<i32> {
 }
 
 
+
+/// What `strftime` needs to know about a `Time`.
+impl strftime::Time for RTime {
+    fn year(&self) -> i32 { self.at.year() }
+    fn month(&self) -> u8 { self.at.month() as u8 }
+    fn day(&self) -> u8 { self.at.day() as u8 }
+    fn hour(&self) -> u8 { self.at.hour() as u8 }
+    fn minute(&self) -> u8 { self.at.minute() as u8 }
+    fn second(&self) -> u8 { self.at.second() as u8 }
+    fn nanoseconds(&self) -> u32 { self.at.nanosecond() }
+    fn day_of_week(&self) -> u8 { self.at.weekday().num_days_from_sunday() as u8 }
+    fn day_of_year(&self) -> u16 { self.at.ordinal() as u16 }
+    fn to_int(&self) -> i64 { self.at.timestamp() }
+    fn is_utc(&self) -> bool { self.zone.as_deref() == Some("UTC") }
+    fn utc_offset(&self) -> i32 { self.at.offset().local_minus_utc() }
+    // A `Time` made from a numeric offset has no zone name; `%Z` prints "".
+    fn time_zone(&self) -> &str { self.zone.as_deref().unwrap_or("") }
+}

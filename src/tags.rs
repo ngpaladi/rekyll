@@ -254,7 +254,7 @@ impl Renderable for Link {
 
         match found {
             Some(url) => {
-                let url = crate::urlfilters::relative_url(&url, &self.baseurl);
+                let url = crate::url::relative_url(&url, &self.baseurl);
                 write!(writer, "{url}").map_err(|e| Error::with_msg(e.to_string()))?;
                 Ok(())
             }

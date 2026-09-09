@@ -8,7 +8,6 @@ use crate::document::{
     categories_from_path, date_filename_matcher, generate_url_from_drop,
     pluralized, populate_title, Collection, Document, UrlDrop,
 };
-use crate::frontmatter;
 use crate::time::{parse_date, site_timezone, RTime};
 use crate::url;
 use crate::value::{Object, Value};
@@ -17,7 +16,9 @@ use indexmap::IndexMap;
 use anyhow::{Context, Result};
 use globset::GlobBuilder;
 use std::collections::HashMap;
+use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// `Page::HTML_EXTENSIONS`.
 const HTML_EXTENSIONS: &[&str] = &[".html", ".xhtml", ".htm"];
@@ -42,13 +43,13 @@ impl Page {
 
     /// `Convertible#path`: front matter may override it outright.
     pub fn path(&self) -> String {
-        frontmatter::data_str(&self.data, "path")
+        data_str(&self.data, "path")
             .map(str::to_string)
             .unwrap_or_else(|| self.relative_path())
     }
 
     pub fn permalink(&self) -> Option<&str> {
-        frontmatter::data_str(&self.data, "permalink")
+        data_str(&self.data, "permalink")
     }
 
     pub fn is_index(&self) -> bool {
@@ -200,7 +201,7 @@ impl Site {
             let rel = entry.path().strip_prefix(&dir).unwrap();
             let text = std::fs::read_to_string(entry.path())
                 .with_context(|| format!("reading layout {}", entry.path().display()))?;
-            let parsed = frontmatter::parse(&text);
+            let parsed = parse_front_matter(&text);
             // Layouts are keyed by path without extension, e.g. "post" or
             // "nested/post".
             let key = rel.with_extension("").to_string_lossy().replace('\\', "/");
@@ -376,7 +377,7 @@ impl Site {
     ) -> Result<Option<Document>> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading document {}", path.display()))?;
-        let parsed = frontmatter::parse(&text);
+        let parsed = parse_front_matter(&text);
         let mut data = deep_merge(&self.defaults.all(relative_path, label), &parsed.data);
 
         let extname = Path::new(relative_path)
@@ -529,7 +530,7 @@ impl Site {
         };
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading page {}", path.display()))?;
-        let parsed = frontmatter::parse(&text);
+        let parsed = parse_front_matter(&text);
 
         // `Page#process`: extension, then basename with trailing dots stripped.
         let ext = Path::new(name)
@@ -699,7 +700,7 @@ fn has_yaml_header(path: &Path) -> bool {
     let mut buf = [0u8; 8];
     let n = f.read(&mut buf).unwrap_or(0);
     let head = String::from_utf8_lossy(&buf[..n]);
-    frontmatter::has_yaml_header(&head)
+    starts_with_front_matter(&head)
 }
 
 /// Ruby `File.fnmatch?` with no flags: `*` crosses "/" separators.
@@ -753,4 +754,52 @@ fn read_data_dir(dir: &Path) -> Result<Object> {
         out.insert(key, crate::yaml::load(&text)?);
     }
     Ok(out)
+}
+
+// --- Front matter (`Document::YAML_FRONT_MATTER_REGEXP`) ---
+
+pub struct FrontMatter {
+    pub data: Object,
+    pub content: String,
+    /// False when the file had no front matter at all, which makes it a static
+    /// file rather than a page.
+    pub has_front_matter: bool,
+}
+
+fn fm_regex() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    // (?s) = Ruby's /m (dot matches newline); (?m) enables ^/$ per line, which
+    // Ruby applies by default.
+    // Jekyll's regex uses \s, which also matches \r, so CRLF files parse.
+    // Jekyll's exact regex. \s matches \r, so CRLF files parse; and the
+    // greedy \s* before $ swallows the blank line after the closing marker,
+    // which is visible whenever a template prints a page's raw content.
+    R.get_or_init(|| Regex::new(r"(?sm)\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)").unwrap())
+}
+
+/// True if the file starts with a front-matter marker, the same cheap check
+/// `Utils.has_yaml_header?` performs before deciding a file is a page.
+fn starts_with_front_matter(text: &str) -> bool {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\A---\s*\r?\n").unwrap()).is_match(text)
+}
+
+pub fn parse_front_matter(text: &str) -> FrontMatter {
+    if let Some(caps) = fm_regex().captures(text) {
+        let yaml_src = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let end = caps.get(0).unwrap().end();
+        let data = crate::yaml::load(yaml_src)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            // A front-matter block holding only comments parses to nil, which
+            // Jekyll turns into an empty hash rather than an error.
+            .unwrap_or_default();
+        return FrontMatter { data, content: text[end..].to_string(), has_front_matter: true };
+    }
+    FrontMatter { data: Object::new(), content: text.to_string(), has_front_matter: false }
+}
+
+/// Helper for reading a scalar out of a data hash.
+pub fn data_str<'a>(data: &'a Object, key: &str) -> Option<&'a str> {
+    data.get(key).and_then(Value::as_str)
 }

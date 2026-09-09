@@ -25,6 +25,7 @@ liquid-core = "0.26"
 percent-encoding = "2"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 regex = "1"
+strftime-ruby = { version = "1.3.2", default-features = false, features = ["std", "alloc"] }
 walkdir = "2"
 yaml-rust2 = "0.12"
 
