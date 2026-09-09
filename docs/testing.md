@@ -8,7 +8,18 @@ diffed against it. Nothing in the docs is claimed that isn't checked here.
 ## Requirements
 
 You need `jekyll` 4.3.2 on your `PATH`, and a `ruby` with `kramdown`,
-`kramdown-parser-gfm` and `liquid` available.
+`kramdown-parser-gfm` and `liquid` available. `tests/harness/Gemfile` pins
+the exact versions, so if you'd rather not trust whatever your distro
+installed:
+
+```
+cd tests/harness && bundle install && cd ../..
+BUNDLE_GEMFILE=tests/harness/Gemfile bundle exec ./tests/harness/all.sh
+```
+
+That's what CI runs on every push. One thing it taught me: upstream Jekyll
+4.3.2 resolves Liquid 4.0.4, while Debian's package is patched to run on
+Liquid 5.4. rekyll matches both.
 
 ## Run everything
 

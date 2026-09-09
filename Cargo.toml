@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Jekyll, but make it Rust"
 license = "MIT"
+authors = ["Noah Paladino <ngpaladi@gmail.com>"]
+repository = "https://github.com/ngpaladi/rekyll"
+readme = "README.md"
 
 [features]
 # The preview server is built in by default; --no-default-features gives a
@@ -41,3 +44,29 @@ strip = true
 
 [patch.crates-io]
 liquid-core = { path = "vendor/liquid-core" }
+
+# Packaging (`cargo deb`, `cargo generate-rpm`). Both take the static musl
+# binary, so the packages have no library dependencies; see
+# .github/workflows/release.yml.
+[package.metadata.deb]
+maintainer = "Noah Paladino <ngpaladi@gmail.com>"
+extended-description = """\
+A from-scratch reimplementation of the Jekyll static site generator that \
+produces byte-identical output from identical input. One binary; no Ruby."""
+section = "web"
+priority = "optional"
+depends = ""
+assets = [
+    ["target/release/rekyll", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/rekyll/", "644"],
+    ["THIRD_PARTY_LICENSES.md", "usr/share/doc/rekyll/", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Jekyll, but make it Rust"
+assets = [
+    { source = "target/release/rekyll", dest = "/usr/bin/rekyll", mode = "755" },
+    { source = "LICENSE", dest = "/usr/share/licenses/rekyll/LICENSE", mode = "644", doc = true },
+    { source = "THIRD_PARTY_LICENSES.md", dest = "/usr/share/licenses/rekyll/THIRD_PARTY_LICENSES.md", mode = "644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/rekyll/README.md", mode = "644", doc = true },
+]

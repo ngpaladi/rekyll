@@ -5,8 +5,13 @@ use crate::site::Site;
 use anyhow::{Context, Result};
 use std::path::Path;
 
-pub fn build(source: &Path, dest: &Path) -> Result<()> {
+/// Build the site. `baseurl` overrides `_config.yml`, as `jekyll build
+/// --baseurl` does.
+pub fn build(source: &Path, dest: &Path, baseurl: Option<&str>) -> Result<()> {
     let mut site = Site::new(source, dest)?;
+    if let Some(b) = baseurl {
+        site.config.0.insert("baseurl".into(), crate::value::Value::str(b));
+    }
     site.read()?;
 
     let renderer = Renderer::new(&site)?;

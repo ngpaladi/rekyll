@@ -1,0 +1,90 @@
+name: Release packages
+
+# On a published release, build the static musl binary, package it as a
+# .deb (Ubuntu/Debian) and an .rpm (Fedora), install each on the distro it
+# targets to prove it works, and attach everything to the release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+      - name: Check the tag matches Cargo.toml
+        if: github.event_name == 'release'
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "${{ github.event.release.tag_name }}" = "v$version" \
+            || { echo "tag ${{ github.event.release.tag_name }} != v$version"; exit 1; }
+      - name: Build the static binary
+        run: cargo build --release --locked --target $TARGET
+      - name: Package
+        run: |
+          cargo deb --no-build --target $TARGET
+          cargo generate-rpm --target $TARGET
+          mkdir dist
+          cp target/$TARGET/debian/*.deb target/$TARGET/generate-rpm/*.rpm dist/
+          tar -C target/$TARGET/release -czf dist/rekyll-$TARGET.tar.gz rekyll
+          (cd dist && sha256sum * > SHA256SUMS)
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+  # Install the .deb on Ubuntu and build a fixture with it.
+  ubuntu:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: sudo apt-get install -y ./dist/rekyll_*.deb
+      - run: rekyll --version && rekyll build -s tests/fixtures/09-blank-template -d /tmp/out && test -f /tmp/out/index.html
+
+  # Install the .rpm on Fedora and do the same.
+  fedora:
+    needs: package
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: dnf install -y ./dist/rekyll-*.rpm
+      - run: rekyll --version && rekyll build -s tests/fixtures/09-blank-template -d /tmp/out && test -f /tmp/out/index.html
+
+  # Attach the verified packages to the release.
+  publish:
+    if: github.event_name == 'release'
+    needs: [ubuntu, fedora]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber --repo "${{ github.repository }}"

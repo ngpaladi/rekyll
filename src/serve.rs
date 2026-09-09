@@ -33,6 +33,7 @@ pub struct Options<'a> {
 pub struct Watch<'a> {
     pub source: &'a Path,
     pub destination: &'a Path,
+    pub baseurl: Option<String>,
 }
 
 /// Bumped on every successful rebuild. The page polls it and reloads when the
@@ -48,7 +49,7 @@ pub fn serve(opts: Options) -> Result<()> {
     let livereload = opts.livereload;
 
     if let Some(watch) = opts.watch {
-        spawn_watcher(watch.source.to_path_buf(), watch.destination.to_path_buf());
+        spawn_watcher(watch.source.to_path_buf(), watch.destination.to_path_buf(), watch.baseurl);
     }
 
     println!("    Server address: http://{}:{}{base}/", opts.host, opts.port);
@@ -74,7 +75,7 @@ pub fn serve(opts: Options) -> Result<()> {
 ///
 /// Polling rather than inotify keeps this dependency-free, and a preview
 /// server can afford a walk twice a second.
-fn spawn_watcher(source: PathBuf, destination: PathBuf) {
+fn spawn_watcher(source: PathBuf, destination: PathBuf, baseurl: Option<String>) {
     std::thread::spawn(move || {
         let mut previous = fingerprint(&source, &destination);
         loop {
@@ -83,7 +84,7 @@ fn spawn_watcher(source: PathBuf, destination: PathBuf) {
             if current == previous {
                 continue;
             }
-            match crate::build::build(&source, &destination) {
+            match crate::build::build(&source, &destination, baseurl.as_deref()) {
                 Ok(()) => {
                     GENERATION.fetch_add(1, Ordering::SeqCst);
                     println!("      Regenerated: {}", chrono::Utc::now().format("%H:%M:%S UTC"));

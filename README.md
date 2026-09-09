@@ -83,7 +83,8 @@ generated site:
   an unzoned `date: 2020-01-02 03:04:05` under `America/New_York` publishes at
   `/2020/01/01/`, exactly as Jekyll does.
 - **Liquid filters** — Jekyll's own set plus overrides where Ruby differs.
-  ~99 expressions diffed against Ruby Liquid 5.4.
+  110 expressions diffed against Ruby Liquid, on both 4.0.4 (what upstream
+  Jekyll 4.3.2 resolves) and 5.4.0 (what Debian ships it with).
 - **Markdown** — a Kramdown-compatible emitter (see below).
 - **Sass** — including libsass's `:compact` output style.
 - **Excerpts**, including the link-reference definitions Jekyll appends.
@@ -125,6 +126,26 @@ covered by fixture 09.
 **Also not implemented**: drafts (`_drafts`), pagination, `site.related_posts`,
 CoffeeScript, TOML config, non-YAML data files, and incremental builds.
 `sample` works but cannot match Jekyll, whose own is unseeded.
+
+## Packages
+
+Every published release carries a `.deb` (Ubuntu/Debian), an `.rpm`
+(Fedora), the static binary as a tarball, and `SHA256SUMS`, built by
+`.github/workflows/release.yml`. Both packages hold the musl binary, so they
+depend on nothing, and the workflow installs each on its distro and builds a
+fixture with it before attaching anything to the release. To build them
+locally:
+
+```
+cargo install cargo-deb cargo-generate-rpm
+cargo build --release --target x86_64-unknown-linux-musl
+cargo deb --no-build --target x86_64-unknown-linux-musl
+cargo generate-rpm --target x86_64-unknown-linux-musl
+```
+
+`.github/workflows/ci.yml` runs the whole differential suite on every push
+against a pinned Jekyll 4.3.2 (`tests/harness/Gemfile`), builds `docs/` with
+rekyll, and publishes it to GitHub Pages from `main`.
 
 ## Distributing the binary
 
@@ -218,7 +239,9 @@ The harnesses are the specification.
 | `tests/harness/units_diff.sh` | YAML scalars against Psych; strftime against Ruby's `Time#strftime` |
 | `tests/harness/serve_smoke.sh` | `rekyll serve`: routing, traversal refusal, reload injection |
 
-Requires `jekyll` (4.3.2) on `PATH`. Fixtures pin `timezone` and `time` in
+Requires `jekyll` (4.3.2) on `PATH`; `tests/harness/Gemfile` pins the exact
+stack, so `BUNDLE_GEMFILE=tests/harness/Gemfile bundle exec ./tests/harness/all.sh`
+runs it against upstream's resolution. Fixtures pin `timezone` and `time` in
 `_config.yml`, without which Jekyll's own output depends on the wall clock and
 the local timezone.
 

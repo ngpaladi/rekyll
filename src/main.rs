@@ -49,6 +49,9 @@ struct Paths {
     /// Destination directory.
     #[arg(short = 'd', long = "destination")]
     destination: Option<PathBuf>,
+    /// Serve the site from this subpath, overriding `baseurl` in _config.yml.
+    #[arg(short = 'b', long)]
+    baseurl: Option<String>,
 }
 
 impl Paths {
@@ -65,25 +68,29 @@ fn main() -> Result<()> {
             let _ = std::io::stdout().write_all(include_bytes!("../THIRD_PARTY_LICENSES.md"));
             Ok(())
         }
-        Command::Build { paths } => rekyll::build::build(&paths.source, &paths.destination()),
+        Command::Build { paths } => {
+            rekyll::build::build(&paths.source, &paths.destination(), paths.baseurl.as_deref())
+        }
 
         #[cfg(feature = "serve")]
         Command::Serve { paths, host, port, skip_initial_build, no_watch, no_livereload } => {
             let dest = paths.destination();
             if !skip_initial_build {
-                rekyll::build::build(&paths.source, &dest)?;
+                rekyll::build::build(&paths.source, &dest, paths.baseurl.as_deref())?;
             }
             // The baseurl decides what prefix the served URLs carry.
             let site = rekyll::site::Site::new(&paths.source, &dest)?;
+            let baseurl = paths.baseurl.clone().unwrap_or_else(|| site.config.str("baseurl").to_string());
             let watch = (!no_watch).then_some(rekyll::serve::Watch {
                 source: &paths.source,
                 destination: &dest,
+                baseurl: paths.baseurl.clone(),
             });
             rekyll::serve::serve(rekyll::serve::Options {
                 root: &dest,
                 host: &host,
                 port,
-                baseurl: site.config.str("baseurl"),
+                baseurl: &baseurl,
                 watch,
                 livereload: !no_livereload,
             })

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  # Every layer diffed against the real Jekyll 4.3.2, plus the docs site
+  # built by rekyll (fixture 11 already proves it matches Jekyll's build).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+        env:
+          BUNDLE_GEMFILE: ${{ github.workspace }}/tests/harness/Gemfile
+      - name: Build
+        run: cargo build --locked
+      - name: Differential suite
+        env:
+          BUNDLE_GEMFILE: ${{ github.workspace }}/tests/harness/Gemfile
+          TZ: UTC
+        run: bundle exec ./tests/harness/all.sh
+      # A project page lives under /<repo>/; drop --baseurl for a custom domain.
+      - name: Build the docs with rekyll
+        run: ./target/debug/rekyll build -s docs -d docs/_site --baseurl "/${{ github.event.repository.name }}"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  # The docs site, published from main. Pages must be set to "GitHub
+  # Actions" as its source; configure-pages does that on first run.
+  docs:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - id: deploy
+        uses: actions/deploy-pages@v4

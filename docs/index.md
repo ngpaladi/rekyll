@@ -71,6 +71,19 @@ The reload works by appending a small script to the HTML the server sends,
 which polls a build counter twice a second. Your built files aren't touched, so
 they still match Jekyll's byte for byte.
 
+## Packages
+
+Each release on GitHub has a `.deb` for Ubuntu and Debian, an `.rpm` for
+Fedora, and the plain static binary in a tarball. The packages contain that
+same static binary, so they don't depend on anything, and the release
+workflow installs each one on its distro and builds a site with it before
+publishing.
+
+```
+sudo apt install ./rekyll_*_amd64.deb
+sudo dnf install ./rekyll-*.x86_64.rpm
+```
+
 ## Shipping it
 
 The binary only needs libc, so you can copy it to another machine and it

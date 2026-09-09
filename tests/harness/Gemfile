@@ -1,0 +1,11 @@
+# The exact Ruby stack the differentials are diffed against. `bundle exec`
+# puts these versions in front of any others. Upstream Jekyll 4.3.2 wants
+# Liquid 4.0.x; Debian's packaged copy is patched to run on Liquid 5.4.
+source "https://rubygems.org"
+gem "jekyll", "4.3.2"
+gem "jekyll-sass-converter", "2.2.0"
+gem "sassc", "2.4.0"
+gem "kramdown", "2.4.0"
+gem "kramdown-parser-gfm", "1.1.0"
+gem "rouge", "4.2.0"
+gem "liquid", "4.0.4"
