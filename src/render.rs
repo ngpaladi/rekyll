@@ -97,20 +97,14 @@ impl Payload {
     /// Reflect a finished page, so a page rendered later sees its converted
     /// content just as Jekyll's live drop would.
     pub fn update_page(&mut self, index: usize, rendered: &Rendered) {
-        let paths = match self.page_paths.get(index) {
-            Some(p) => p.clone(),
-            None => return,
-        };
+        let paths = self.page_paths.get(index).cloned().unwrap_or_default();
         self.patch(&paths, rendered, false);
     }
 
     /// Reflect a finished document everywhere it appears in the drop, so a
     /// document rendered later sees its converted content.
     pub fn update_document(&mut self, relative_path: &str, rendered: &Rendered) {
-        let paths = match self.doc_paths.get(relative_path) {
-            Some(p) => p.clone(),
-            None => return,
-        };
+        let paths = self.doc_paths.get(relative_path).cloned().unwrap_or_default();
         self.patch(&paths, rendered, true);
     }
 
@@ -260,7 +254,6 @@ impl Renderer {
         self.render_liquid(template, &payload, "<string>")
     }
 
-    /// `Renderer#run` for a page: Liquid, then the converter, then layouts.
     /// `Renderer#run`: Liquid, then the converter, then the layout chain.
     /// Returns the converted content (which Jekyll assigns before layouts) and
     /// the final output.
@@ -471,26 +464,16 @@ pub fn page_to_liquid(site: &Site, page: &Page) -> Object {
     let mut further = Object::new();
     further.insert("content".into(), Value::str(page.content.clone()));
     // `Page#dir` is the URL's directory, not the source directory.
-    further.insert(
-        "dir".into(),
-        Value::str(if url.ends_with('/') {
-            url.clone()
-        } else {
-            url_dir(&url)
-        }),
-    );
+    let dir = match url.rfind('/') {
+        Some(i) => url[..=i].to_string(),
+        None => "/".to_string(),
+    };
+    further.insert("dir".into(), Value::str(dir));
     further.insert("excerpt".into(), page.data.get("excerpt").cloned().unwrap_or(Value::Null));
     further.insert("name".into(), Value::str(page.name.clone()));
     further.insert("path".into(), Value::str(page.path()));
     further.insert("url".into(), Value::str(url));
     deep_merge(&page.data, &further)
-}
-
-fn url_dir(url: &str) -> String {
-    match url.rfind('/') {
-        Some(i) => url[..=i].to_string(),
-        None => "/".to_string(),
-    }
 }
 
 /// `SiteDrop`: the configuration as fallback data, with the computed
@@ -503,28 +486,30 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     drop.insert("data", LaxValue::Object(LaxObject::from_value_object(&site.data)));
     drop.insert("time", LaxValue::str(site.time.to_s()));
 
+    // `html_pages` is a filtered view of the same page objects.
     let pages: Vec<LaxValue> = site
         .pages
         .iter()
         .map(|p| LaxValue::Object(LaxObject::from_value_object(&page_to_liquid(site, p))))
         .collect();
-
     let html_pages: Vec<LaxValue> = site
         .pages
         .iter()
-        .filter(|p| is_html_page(site, p))
-        .map(|p| LaxValue::Object(LaxObject::from_value_object(&page_to_liquid(site, p))))
+        .zip(&pages)
+        .filter(|(p, _)| is_html_page(site, p))
+        .map(|(_, v)| v.clone())
         .collect();
 
     let static_files: Vec<LaxValue> = site
         .static_files
         .iter()
         .map(|f| {
+            let (stem, ext) = crate::site::split_ext(&f.name);
             let mut o = LaxObject::new();
-            o.insert("path", LaxValue::str(format!("/{}", f.relative_path().trim_start_matches('/'))));
+            o.insert("path", LaxValue::str(format!("/{}", f.relative_path)));
             o.insert("name", LaxValue::str(f.name.clone()));
-            o.insert("basename", LaxValue::str(basename_no_ext(&f.name)));
-            o.insert("extname", LaxValue::str(extname(&f.name)));
+            o.insert("basename", LaxValue::str(stem));
+            o.insert("extname", LaxValue::str(ext));
             LaxValue::Object(o)
         })
         .collect();
@@ -536,14 +521,11 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
     // places the drop exposes it.
     let mut built: HashMap<String, LaxValue> = HashMap::new();
     for (collection, doc) in site.documents() {
-        built.insert(
-            doc.relative_path.clone(),
-            LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
-                site, collection, doc, state,
-            ))),
-        );
+        let object = LaxObject::from_value_object(&doc_to_liquid(site, collection, doc, state));
+        built.insert(doc.relative_path.clone(), LaxValue::Object(object));
     }
     let get = |doc: &Document| built.get(&doc.relative_path).cloned().unwrap_or(LaxValue::Nil);
+    let docs_of = |c: &Collection| LaxValue::Array(c.docs.iter().map(get).collect());
 
     // `SiteDrop#posts` is newest-first, the reverse of the stored order.
     let posts: Vec<LaxValue> = site
@@ -558,19 +540,9 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
 
     // `SiteDrop#[]` exposes each non-posts collection under its own label.
     for (label, collection) in &site.collections {
-        if label == "posts" {
-            continue;
+        if label != "posts" {
+            drop.insert(label.clone(), docs_of(collection));
         }
-        let docs: Vec<LaxValue> = collection
-            .docs
-            .iter()
-            .map(|d| {
-                LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(
-                    site, collection, d, state,
-                )))
-            })
-            .collect();
-        drop.insert(label.clone(), LaxValue::Array(docs));
     }
 
     // `SiteDrop#collections` is sorted by label.
@@ -583,17 +555,7 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
             let mut o = LaxObject::from_value_object(&c.metadata);
             o.insert("label", LaxValue::str((*label).clone()));
             o.insert("relative_directory", LaxValue::str(c.relative_directory()));
-            o.insert(
-                "docs",
-                LaxValue::Array(
-                    c.docs
-                        .iter()
-                        .map(|d| {
-                            LaxValue::Object(LaxObject::from_value_object(&doc_to_liquid(site, c, d, state)))
-                        })
-                        .collect(),
-                ),
-            );
+            o.insert("docs", docs_of(c));
             LaxValue::Object(o)
         })
         .collect();
@@ -609,18 +571,6 @@ fn site_drop(site: &Site, state: &RenderState) -> LaxObject {
 fn is_html_page(site: &Site, page: &Page) -> bool {
     let ext = site.output_ext(page);
     matches!(ext.as_str(), ".html" | ".xhtml" | ".htm") || site.page_url(page).ends_with('/')
-}
-
-fn extname(name: &str) -> String {
-    std::path::Path::new(name)
-        .extension()
-        .map(|e| format!(".{}", e.to_string_lossy()))
-        .unwrap_or_default()
-}
-
-fn basename_no_ext(name: &str) -> String {
-    let e = extname(name);
-    name[..name.len() - e.len()].to_string()
 }
 
 /// `Site#tags` / `Site#categories`: posts grouped by each value, with the
@@ -649,36 +599,19 @@ fn group_by(site: &Site, key: &str, get: &dyn Fn(&Document) -> LaxValue) -> LaxO
 /// tags can share one store.
 fn load_includes(site: &Site) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
-
     let dir = site.source.join(site.config.str("includes_dir"));
     if dir.is_dir() {
-        for entry in walkdir::WalkDir::new(&dir).sort_by_file_name() {
-            let entry = entry?;
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let name = entry
-                .path()
-                .strip_prefix(&dir)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.push((name, std::fs::read_to_string(entry.path())?));
+        for (name, path) in crate::site::walk_files(&dir)? {
+            out.push((name, std::fs::read_to_string(path)?));
         }
     }
-
     // `include_relative` resolves against the including file's directory. The
     // whole source tree is registered so any relative target can be found.
-    for entry in walkdir::WalkDir::new(&site.source).sort_by_file_name() {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let rel = entry.path().strip_prefix(&site.source).unwrap().to_string_lossy().to_string();
+    for (rel, path) in crate::site::walk_files(&site.source)? {
         if rel.starts_with('_') && !rel.starts_with("_includes") {
             continue;
         }
-        if let Ok(text) = std::fs::read_to_string(entry.path()) {
+        if let Ok(text) = std::fs::read_to_string(path) {
             out.push((format!("__relative__/{rel}"), text));
         }
     }
@@ -695,7 +628,7 @@ fn build_url_index(site: &Site) -> crate::tags::UrlIndex {
         index.insert(doc.relative_path.clone(), site.doc_url(doc));
     }
     for file in &site.static_files {
-        index.insert(file.relative_path(), site.static_file_url(file));
+        index.insert(file.relative_path.clone(), site.static_file_url(file));
     }
     index
 }

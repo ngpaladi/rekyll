@@ -25,7 +25,7 @@ const HTML_EXTENSIONS: &[&str] = &[".html", ".xhtml", ".htm"];
 
 #[derive(Debug, Clone)]
 pub struct Page {
-    /// Directory between the source root and the file, with a leading slash.
+    /// Directory between the source root and the file ("" at the root).
     pub dir: String,
     pub name: String,
     pub basename: String,
@@ -43,13 +43,11 @@ impl Page {
 
     /// `Convertible#path`: front matter may override it outright.
     pub fn path(&self) -> String {
-        data_str(&self.data, "path")
-            .map(str::to_string)
-            .unwrap_or_else(|| self.relative_path())
+        self.data.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.relative_path())
     }
 
     pub fn permalink(&self) -> Option<&str> {
-        data_str(&self.data, "permalink")
+        self.data.get("permalink").and_then(Value::as_str)
     }
 
     pub fn is_index(&self) -> bool {
@@ -59,41 +57,20 @@ impl Page {
 
 #[derive(Debug, Clone)]
 pub struct StaticFile {
-    pub dir: String,
     pub name: String,
     pub source: PathBuf,
     /// The owning collection, when the file sits inside one. Such files are
     /// placed by the collection's URL template rather than by their path.
     pub collection: Option<String>,
-    /// Path relative to the source root, used when a collection applies.
-    pub relative: String,
+    /// Path relative to the source root.
+    pub relative_path: String,
 }
 
 impl StaticFile {
-    pub fn relative_path(&self) -> String {
-        if self.collection.is_some() {
-            return self.relative.clone();
-        }
-        join_path(&self.dir, &self.name)
-    }
-
-    fn extname(&self) -> String {
-        match self.name.rfind('.') {
-            Some(i) if i > 0 => self.name[i..].to_string(),
-            _ => String::new(),
-        }
-    }
-
-    /// `StaticFile#basename`.
-    fn basename(&self) -> String {
-        let e = self.extname();
-        self.name[..self.name.len() - e.len()].trim_end_matches('.').to_string()
-    }
-
     /// `StaticFile#cleaned_relative_path`.
     fn cleaned_relative_path(&self, collection_dir: &str) -> String {
-        let e = self.extname();
-        let cleaned = self.relative[..self.relative.len() - e.len()].trim_end_matches('.');
+        let ext = split_ext(&self.name).1;
+        let cleaned = self.relative_path[..self.relative_path.len() - ext.len()].trim_end_matches('.');
         cleaned.replacen(collection_dir, "", 1)
     }
 }
@@ -184,7 +161,7 @@ impl Site {
         }
         // `Reader#sort_files!`: pages by bare filename, static files by path.
         self.pages.sort_by(|a, b| a.name.cmp(&b.name));
-        self.static_files.sort_by(|a, b| a.relative_path().cmp(&b.relative_path()));
+        self.static_files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
         Ok(())
     }
 
@@ -193,47 +170,31 @@ impl Site {
         if !dir.is_dir() {
             return Ok(());
         }
-        for entry in walkdir::WalkDir::new(&dir).sort_by_file_name() {
-            let entry = entry?;
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let rel = entry.path().strip_prefix(&dir).unwrap();
-            let text = std::fs::read_to_string(entry.path())
-                .with_context(|| format!("reading layout {}", entry.path().display()))?;
+        for (rel, path) in walk_files(&dir)? {
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading layout {}", path.display()))?;
             let parsed = parse_front_matter(&text);
             // Layouts are keyed by path without extension, e.g. "post" or
             // "nested/post".
-            let key = rel.with_extension("").to_string_lossy().replace('\\', "/");
-            self.layouts.insert(
-                key,
-                Layout {
-                    data: parsed.data,
-                    content: parsed.content,
-                    path: entry.path().to_string_lossy().to_string(),
-                },
-            );
+            let key = split_ext(&rel).0.to_string();
+            let layout = Layout { data: parsed.data, content: parsed.content, path: path.to_string_lossy().to_string() };
+            self.layouts.insert(key, layout);
         }
         Ok(())
     }
 
+    /// The absolute path of a source-relative directory or file.
+    fn abs(&self, rel: &str) -> PathBuf {
+        self.source.join(rel.trim_start_matches('/'))
+    }
+
     /// `Reader#read_directories`, recursive.
     fn read_directories(&mut self, dir: &str) -> Result<()> {
-        let base = if dir.is_empty() {
-            self.source.clone()
-        } else {
-            self.source.join(dir.trim_start_matches('/'))
-        };
+        let base = self.abs(dir);
         if !base.is_dir() {
             return Ok(());
         }
-
-        let mut entries: Vec<String> = std::fs::read_dir(&base)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        entries.sort();
-        let entries = self.filter_entries(&entries, dir);
+        let entries = self.filter_entries(&entry_names(&base)?, dir);
 
         let mut dirs = Vec::new();
         let mut pages = Vec::new();
@@ -266,36 +227,23 @@ impl Site {
         }
         for name in statics {
             self.static_files.push(StaticFile {
-                dir: dir.to_string(),
-                name: name.clone(),
                 source: base.join(&name),
                 collection: None,
-                relative: join_path(dir, &name).trim_start_matches('/').to_string(),
+                relative_path: join_path(dir, &name),
+                name,
             });
         }
         Ok(())
     }
 
-
     /// `Reader#retrieve_posts` for one directory: `<dir>/_posts` is read even
     /// though the entry filter hides underscore-prefixed directories.
     fn read_posts(&mut self, dir: &str) -> Result<()> {
-        let posts_dir = if dir.is_empty() {
-            self.source.join("_posts")
-        } else {
-            self.source.join(dir.trim_start_matches('/')).join("_posts")
-        };
+        let posts_dir = self.abs(dir).join("_posts");
         if !posts_dir.is_dir() {
             return Ok(());
         }
-
-        let mut entries: Vec<String> = std::fs::read_dir(&posts_dir)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        entries.sort();
-
-        for entry in entries {
+        for entry in entry_names(&posts_dir)? {
             // Only date-prefixed filenames become posts.
             if !date_filename_matcher().is_match(&entry) {
                 continue;
@@ -331,32 +279,24 @@ impl Site {
             }
             let mut docs = Vec::new();
             let mut statics = Vec::new();
-            for entry in walkdir::WalkDir::new(&dir).sort_by_file_name() {
-                let entry = entry?;
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-                let name = entry.file_name().to_string_lossy().to_string();
+            for (rel, path) in walk_files(&dir)? {
+                let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
                 if is_special(&name) || name.ends_with('~') {
                     continue;
                 }
-                let rel_in_collection =
-                    entry.path().strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/");
-                let relative = format!("_{label}/{rel_in_collection}");
-
-                if has_yaml_header(entry.path()) {
-                    if let Some(doc) = self.read_document(entry.path(), &relative, &label)? {
+                let relative = format!("_{label}/{rel}");
+                if has_yaml_header(&path) {
+                    if let Some(doc) = self.read_document(&path, &relative, &label)? {
                         docs.push(doc);
                     }
                 } else {
                     // Files without front matter ride along as static files,
                     // placed by the collection's URL template.
                     statics.push(StaticFile {
-                        dir: format!("/{}", parent_of(&relative)),
                         name,
-                        source: entry.path().to_path_buf(),
+                        source: path,
                         collection: Some(label.clone()),
-                        relative: relative.clone(),
+                        relative_path: relative,
                     });
                 }
             }
@@ -380,15 +320,9 @@ impl Site {
         let parsed = parse_front_matter(&text);
         let mut data = deep_merge(&self.defaults.all(relative_path, label), &parsed.data);
 
-        let extname = Path::new(relative_path)
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy()))
-            .unwrap_or_default();
+        let extname = split_ext(relative_path).1.to_string();
         let basename = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let basename_without_ext = match basename.rfind('.') {
-            Some(0) | None => basename.clone(),
-            Some(i) => basename[..i].to_string(),
-        };
+        let basename_without_ext = split_ext(&basename).0.to_string();
 
         // `categories_from_path` runs before front matter is merged, so
         // directory-derived categories come first and front matter adds to them.
@@ -492,18 +426,19 @@ impl Site {
     pub fn static_file_url(&self, file: &StaticFile) -> String {
         let collection = match file.collection.as_ref().and_then(|l| self.collections.get(l)) {
             Some(c) => c,
-            None => return format!("/{}", file.relative_path().trim_start_matches('/')),
+            None => return format!("/{}", file.relative_path),
         };
+        let (stem, ext) = split_ext(&file.name);
         let placeholders: Vec<(&str, Option<String>)> = vec![
             ("collection", Some(collection.label.clone())),
             ("path", Some(file.cleaned_relative_path(&collection.relative_directory()))),
             ("output_ext", Some(String::new())),
-            ("name", Some(file.basename())),
+            ("name", Some(stem.trim_end_matches('.').to_string())),
             ("title", Some(String::new())),
         ];
         let template = collection.url_template(&self.permalink_style());
         let base = url::sanitize_url(&url::generate_url(&template, &placeholders));
-        format!("{}{}", base.trim_end_matches('/'), file.extname())
+        format!("{}{ext}", base.trim_end_matches('/'))
     }
 
     /// `StaticFile#destination`.
@@ -523,30 +458,20 @@ impl Site {
     }
 
     fn read_page(&self, dir: &str, name: &str) -> Result<Page> {
-        let path = if dir.is_empty() {
-            self.source.join(name)
-        } else {
-            self.source.join(dir.trim_start_matches('/')).join(name)
-        };
+        let path = self.abs(dir).join(name);
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading page {}", path.display()))?;
         let parsed = parse_front_matter(&text);
 
         // `Page#process`: extension, then basename with trailing dots stripped.
-        let ext = Path::new(name)
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy()))
-            .unwrap_or_default();
-        let basename = name[..name.len() - ext.len()].trim_end_matches('.').to_string();
-
-        let relative_path = join_path(dir, name).trim_start_matches('/').to_string();
-        let data = deep_merge(&self.defaults.all(&relative_path, "pages"), &parsed.data);
+        let (stem, ext) = split_ext(name);
+        let data = deep_merge(&self.defaults.all(&join_path(dir, name), "pages"), &parsed.data);
 
         Ok(Page {
             dir: dir.to_string(),
             name: name.to_string(),
-            basename,
-            ext,
+            basename: stem.trim_end_matches('.').to_string(),
+            ext: ext.to_string(),
             data,
             content: parsed.content,
             output: String::new(),
@@ -568,7 +493,7 @@ impl Site {
                     return false;
                 }
                 let rel = join_path(dir, e).trim_start_matches('/').to_string();
-                let included = self.glob_include(&include, e) || self.glob_include(&include, e);
+                let included = self.glob_include(&include, e);
                 if self.glob_include(&effective_exclude, &rel) && !included {
                     return false;
                 }
@@ -615,8 +540,9 @@ impl Site {
 
     fn converted_ext(&self, permalink: Option<&str>, ext: &str) -> String {
         if let Some(p) = permalink.filter(|p| !p.ends_with('/')) {
-            if let Some(e) = Path::new(p).extension() {
-                return format!(".{}", e.to_string_lossy());
+            let ext = split_ext(p.rsplit('/').next().unwrap_or(p)).1;
+            if !ext.is_empty() {
+                return ext.to_string();
             }
         }
         if self.is_markdown(ext) {
@@ -679,6 +605,38 @@ impl Site {
     }
 }
 
+/// Ruby's `File.extname` and `File.basename(name, ".*")` in one: split on the
+/// last dot, treating a leading dot (".htaccess") as part of the name.
+pub fn split_ext(name: &str) -> (&str, &str) {
+    match name.rfind('.') {
+        Some(i) if i > 0 => name.split_at(i),
+        _ => (name, ""),
+    }
+}
+
+/// Every file under `dir`, sorted, as (path relative to `dir`, absolute path).
+pub fn walk_files(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in walkdir::WalkDir::new(dir).sort_by_file_name() {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            let rel = entry.path().strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
+            out.push((rel, entry.path().to_path_buf()));
+        }
+    }
+    Ok(out)
+}
+
+/// The names in a directory, sorted the way `Dir.entries.sort` would.
+fn entry_names(dir: &Path) -> Result<Vec<String>> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
 /// Sass sources are converted to CSS.
 pub fn is_sass(ext: &str) -> bool {
     matches!(ext, ".sass" | ".scss")
@@ -724,34 +682,22 @@ pub fn join_path(a: &str, b: &str) -> String {
 }
 
 
-fn parent_of(relative: &str) -> String {
-    match relative.rfind('/') {
-        Some(i) => relative[..i].to_string(),
-        None => String::new(),
-    }
-}
-
 /// Recursively read a `_data` directory. Files become entries keyed by their
 /// basename; subdirectories become nested hashes.
 fn read_data_dir(dir: &Path) -> Result<Object> {
     let mut out = Object::new();
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
+    for name in entry_names(dir)? {
+        let path = dir.join(&name);
         if path.is_dir() {
             out.insert(name, Value::Object(read_data_dir(&path)?));
             continue;
         }
-        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        if !matches!(ext.as_str(), "yml" | "yaml") {
+        let (key, ext) = split_ext(&name);
+        if !matches!(ext.to_lowercase().as_str(), ".yml" | ".yaml") {
             continue;
         }
-        let key = name[..name.len() - ext.len() - 1].to_string();
         let text = std::fs::read_to_string(&path)?;
-        out.insert(key, crate::yaml::load(&text)?);
+        out.insert(key.to_string(), crate::yaml::load(&text)?);
     }
     Ok(out)
 }
@@ -761,17 +707,12 @@ fn read_data_dir(dir: &Path) -> Result<Object> {
 pub struct FrontMatter {
     pub data: Object,
     pub content: String,
-    /// False when the file had no front matter at all, which makes it a static
-    /// file rather than a page.
-    pub has_front_matter: bool,
 }
 
 fn fm_regex() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     // (?s) = Ruby's /m (dot matches newline); (?m) enables ^/$ per line, which
-    // Ruby applies by default.
-    // Jekyll's regex uses \s, which also matches \r, so CRLF files parse.
-    // Jekyll's exact regex. \s matches \r, so CRLF files parse; and the
+    // Ruby applies by default. Otherwise Jekyll's exact regex. \s matches \r, so CRLF files parse; and the
     // greedy \s* before $ swallows the blank line after the closing marker,
     // which is visible whenever a template prints a page's raw content.
     R.get_or_init(|| Regex::new(r"(?sm)\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)").unwrap())
@@ -794,12 +735,7 @@ pub fn parse_front_matter(text: &str) -> FrontMatter {
             // A front-matter block holding only comments parses to nil, which
             // Jekyll turns into an empty hash rather than an error.
             .unwrap_or_default();
-        return FrontMatter { data, content: text[end..].to_string(), has_front_matter: true };
+        return FrontMatter { data, content: text[end..].to_string() };
     }
-    FrontMatter { data: Object::new(), content: text.to_string(), has_front_matter: false }
-}
-
-/// Helper for reading a scalar out of a data hash.
-pub fn data_str<'a>(data: &'a Object, key: &str) -> Option<&'a str> {
-    data.get(key).and_then(Value::as_str)
+    FrontMatter { data: Object::new(), content: text.to_string() }
 }

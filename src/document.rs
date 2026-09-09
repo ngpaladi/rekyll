@@ -45,11 +45,7 @@ impl Document {
 
     /// `File.basename(path, ".*")` — strips only the final extension.
     pub fn basename_without_ext(&self) -> String {
-        let b = self.basename();
-        match b.rfind('.') {
-            Some(0) | None => b,
-            Some(i) => b[..i].to_string(),
-        }
+        crate::site::split_ext(&self.basename()).0.to_string()
     }
 
     /// `Document#cleaned_relative_path`: drop the extension and the
@@ -136,10 +132,10 @@ impl UrlDrop {
 
         // Categories join with "/" after de-duplication, preserving order.
         let cats = string_list(doc.data.get("categories"));
-        v.insert("categories".into(), Value::str(join_unique(cats.iter().map(|c| c.to_lowercase()))));
+        v.insert("categories".into(), Value::str(dedupe(cats.iter().map(|c| c.to_lowercase()).collect()).join("/")));
         v.insert(
             "slugified_categories".into(),
-            Value::str(join_unique(cats.iter().map(|c| url::slugify(c, "default", false)))),
+            Value::str(dedupe(cats.iter().map(|c| url::slugify(c, "default", false)).collect()).join("/")),
         );
 
         let d = &doc.date;
@@ -226,9 +222,11 @@ pub fn string_list(v: Option<&Value>) -> Vec<String> {
     }
 }
 
-fn join_unique(items: impl Iterator<Item = String>) -> String {
+/// Ruby's `Array#uniq`: first occurrence wins, order kept.
+pub fn dedupe(mut items: Vec<String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    items.filter(|s| seen.insert(s.clone())).collect::<Vec<_>>().join("/")
+    items.retain(|s| seen.insert(s.clone()));
+    items
 }
 
 /// `Document#populate_categories` and `#populate_tags` merged: normalise the
@@ -238,9 +236,7 @@ pub fn pluralized(data: &Object, singular: &str, plural: &str) -> Vec<String> {
     if out.is_empty() {
         out = string_list(data.get(plural));
     }
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|s| seen.insert(s.clone()));
-    out
+    dedupe(out)
 }
 
 /// `Document#populate_title`: derive title, slug and ext from the filename.

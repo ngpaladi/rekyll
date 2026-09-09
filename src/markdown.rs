@@ -445,7 +445,6 @@ impl<'a> Emitter<'a> {
             let whole = caps.get(0).unwrap();
             let segment = &raw[last..whole.start()];
             out.push_str(&self.plain_segment(segment, prev));
-            prev = segment.chars().next_back().or(prev);
             match decode_entity(&caps[1]) {
                 // `<`, `>` and `&` stay as entities even in as_char mode,
                 // because emitting them literally would break the markup.
