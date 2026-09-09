@@ -4,8 +4,8 @@
 
 use crate::config::{deep_merge, Config, Defaults};
 use crate::document::{
-    categories_from_path, date_filename_matcher, generate_url_from_drop,
-    pluralized, populate_title, Collection, Document, UrlDrop,
+    categories_from_path, generate_url_from_drop, pluralized, populate_title, Collection, Document,
+    UrlDrop, DATE_FILENAME,
 };
 use crate::time::{parse_date, site_timezone, RTime};
 use crate::url;
@@ -17,7 +17,7 @@ use globset::GlobBuilder;
 use std::collections::HashMap;
 use regex::Regex;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 /// `Page::HTML_EXTENSIONS`.
 const HTML_EXTENSIONS: &[&str] = &[".html", ".xhtml", ".htm"];
@@ -242,7 +242,7 @@ impl Site {
         }
         for entry in entry_names(&posts_dir)? {
             // Only date-prefixed filenames become posts.
-            if !date_filename_matcher().is_match(&entry) {
+            if !DATE_FILENAME.is_match(&entry) {
                 continue;
             }
             let path = posts_dir.join(&entry);
@@ -330,7 +330,7 @@ impl Site {
         // The filename date seeds `date` unless front matter already set one.
         let mut date_source = data.get("date").filter(|v| v.truthy()).map(|v| v.to_string());
         if date_source.is_none() {
-            if let Some(c) = date_filename_matcher().captures(relative_path) {
+            if let Some(c) = DATE_FILENAME.captures(relative_path) {
                 date_source = Some(c[1].to_string());
             }
         }
@@ -666,7 +666,7 @@ fn has_yaml_header(path: &Path) -> bool {
     let mut buf = [0u8; 8];
     let n = f.read(&mut buf).unwrap_or(0);
     let head = String::from_utf8_lossy(&buf[..n]);
-    starts_with_front_matter(&head)
+    FRONT_MATTER_START.is_match(&head)
 }
 
 /// Ruby `File.fnmatch?` with no flags: `*` crosses "/" separators.
@@ -717,26 +717,20 @@ pub struct FrontMatter {
     pub content: String,
 }
 
-fn fm_regex() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    // (?s) = Ruby's /m (dot matches newline); (?m) enables ^/$ per line, which
-    // Ruby applies by default. Otherwise Jekyll's exact regex. \s matches \r, so CRLF files parse; and the
-    // greedy \s* before $ swallows the blank line after the closing marker,
-    // which is visible whenever a template prints a page's raw content.
-    R.get_or_init(|| Regex::new(r"(?sm)\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)").unwrap())
-}
+// Jekyll's exact regex. (?s) is Ruby's /m (dot matches newline) and (?m)
+// makes ^/$ per-line, which Ruby does by default. \s matches \r, so CRLF files
+// parse; and the greedy \s* before $ swallows the blank line after the closing
+// marker, which shows whenever a template prints a page's raw content.
+static FRONT_MATTER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?sm)\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)").unwrap());
 
-/// True if the file starts with a front-matter marker, the same cheap check
-/// `Utils.has_yaml_header?` performs before deciding a file is a page.
-fn starts_with_front_matter(text: &str) -> bool {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"\A---\s*\r?\n").unwrap()).is_match(text)
-}
+/// `Utils.has_yaml_header?`: the cheap check that decides a file is a page.
+static FRONT_MATTER_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A---\s*\r?\n").unwrap());
 
 /// Split a file into front matter and content. A YAML error comes back
 /// alongside empty data, since the content is still usable.
 pub fn parse_front_matter(text: &str) -> (FrontMatter, Option<anyhow::Error>) {
-    let Some(caps) = fm_regex().captures(text) else {
+    let Some(caps) = FRONT_MATTER.captures(text) else {
         return (FrontMatter { data: Object::new(), content: text.to_string() }, None);
     };
     let yaml_src = caps.get(1).map(|m| m.as_str()).unwrap_or("");

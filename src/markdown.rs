@@ -19,7 +19,17 @@
 
 use crate::site::Site;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+/// An entity reference: numeric, hex or named.
+static ENTITY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);").unwrap());
+/// HTML void elements, which kramdown writes XHTML-style.
+static VOID_TAG: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(\s[^>]*?)?\s*/?>").unwrap()
+});
 
 pub fn convert(site: &Site, content: &str) -> String {
     convert_opts(content, smart_quotes(site))
@@ -452,12 +462,10 @@ impl<'a> Emitter<'a> {
     /// typographic substitutions, and turn entity references into the literal
     /// characters `entity_output: as_char` asks for.
     fn render_text_run(&self, raw: &str, preceding: Option<char>) -> String {
-        let entity = regex::Regex::new(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);").unwrap();
-
         let mut out = String::with_capacity(raw.len());
         let mut last = 0;
         let mut prev = preceding;
-        for caps in entity.captures_iter(raw) {
+        for caps in ENTITY.captures_iter(raw) {
             let whole = caps.get(0).unwrap();
             let segment = &raw[last..whole.start()];
             out.push_str(&self.plain_segment(segment, prev));
@@ -628,11 +636,7 @@ fn codespan_text(span: &str) -> Option<&str> {
 }
 
 fn rewrite_inline_html(html: &str) -> String {
-    let re = regex::Regex::new(
-        r"(?i)<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(\s[^>]*?)?\s*/?>",
-    )
-    .unwrap();
-    re.replace_all(html, |c: &regex::Captures| {
+    VOID_TAG.replace_all(html, |c: &regex::Captures| {
         let name = &c[1];
         let attrs = c.get(2).map(|m| m.as_str().trim_end()).unwrap_or("");
         format!("<{name}{attrs} />")

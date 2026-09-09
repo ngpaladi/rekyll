@@ -15,8 +15,9 @@ use liquid_core::parser::{FilterArguments, ParameterReflection};
 use liquid_core::{
     Error, Expression, Filter, FilterReflection, ParseFilter, Result, Runtime, Value, ValueView,
 };
+use regex::Regex;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 /// Site-level facts the filters need at render time.
 pub struct FilterCtx {
@@ -359,11 +360,12 @@ fn f_xml_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Ru
 
 /// `escape_once` leaves existing entity references alone.
 fn f_escape_once(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
+    static ENTITY: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"&(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);").unwrap());
     let text = s(input);
-    let re = regex::Regex::new(r"&(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);").unwrap();
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
-    for m in re.find_iter(&text) {
+    for m in ENTITY.find_iter(&text) {
         out.push_str(&escape_html_ruby(&text[last..m.start()]));
         out.push_str(m.as_str());
         last = m.end();
@@ -518,8 +520,8 @@ fn f_to_integer(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Ru
 
 /// Ruby's `String#to_f`: the leading number, ignoring whatever follows.
 fn leading_number(s: &str) -> Option<f64> {
-    let re = regex::Regex::new(r"^\s*[-+]?\d*\.?\d*").unwrap();
-    re.find(s).and_then(|m| m.as_str().trim().parse::<f64>().ok())
+    static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*[-+]?\d*\.?\d*").unwrap());
+    NUMBER.find(s).and_then(|m| m.as_str().trim().parse::<f64>().ok())
 }
 
 /// `inspect`: Ruby's `Object#inspect`, then HTML-escaped by Jekyll.

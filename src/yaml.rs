@@ -12,10 +12,11 @@ use crate::value::{Object, Value};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone};
 use regex::Regex;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust2::scanner::{Marker, TScalarStyle};
 
+/// Psych's scalar patterns, in the order `tokenize` tries them.
 struct Res {
     time: Regex,
     date: Regex,
@@ -24,11 +25,12 @@ struct Res {
     string_guard: Regex,
     base60_int: Regex,
     base60_float: Regex,
+    trailing_dot: Regex,
+    time_parts: Regex,
 }
 
-fn res() -> &'static Res {
-    static R: OnceLock<Res> = OnceLock::new();
-    R.get_or_init(|| Res {
+static RES: LazyLock<Res> = LazyLock::new(|| {
+    Res {
         time: Regex::new(
             r"^-?\d{4}-\d{1,2}-\d{1,2}(?:[Tt]|\s+)\d{1,2}:\d\d:\d\d(?:\.\d*)?(?:\s*(?:Z|[-+]\d{1,2}:?(?:\d\d)?))?$",
         )
@@ -44,15 +46,21 @@ fn res() -> &'static Res {
         string_guard: Regex::new(r#"^[^\d.:\-]?[[:alpha:]_\s!@#$%\^&*(){}<>|/\\~;=]+"#).unwrap(),
         base60_int: Regex::new(r"^[-+]?[0-9][0-9_]*(:[0-5]?[0-9]){1,2}$").unwrap(),
         base60_float: Regex::new(r"^[-+]?[0-9][0-9_]*(:[0-5]?[0-9]){1,2}\.[0-9_]*$").unwrap(),
-    })
-}
+        // Ruby strips a trailing "." before the exponent or end of string.
+        trailing_dot: Regex::new(r"\.([Ee]|$)").unwrap(),
+        time_parts: Regex::new(
+            r"^(-?\d{4})-(\d{1,2})-(\d{1,2})[ tT](\d{1,2}):(\d\d):(\d\d)(?:\.(\d*))?\s*(Z|[-+]\d{1,2}:?(?:\d\d)?)?",
+        )
+        .unwrap(),
+    }
+});
 
 /// Psych::ScalarScanner#tokenize — resolve a *plain, untagged* scalar.
 pub fn tokenize(s: &str) -> Value {
     if s.is_empty() {
         return Value::Null;
     }
-    let r = res();
+    let r = &*RES;
 
     // Guard against hash keys / prose being read as numbers. Psych checks this
     // first and short-circuits anything longer than five characters.
@@ -112,9 +120,7 @@ pub fn tokenize(s: &str) -> Value {
         if s == "." || s == "-." || s == "+." {
             return Value::Str(s.to_string());
         }
-        let cleaned = s.replace([',', '_'], "");
-        // Ruby strips a trailing "." before the exponent or end of string.
-        let cleaned = Regex::new(r"\.([Ee]|$)").unwrap().replace(&cleaned, "$1").to_string();
+        let cleaned = r.trailing_dot.replace(&s.replace([',', '_'], ""), "$1").to_string();
         return cleaned.parse::<f64>().map(Value::Float).unwrap_or(Value::Str(s.to_string()));
     }
 
@@ -176,11 +182,7 @@ fn leading_i64(s: &str) -> i64 {
 
 /// Psych::ScalarScanner#parse_time.
 fn parse_time(s: &str) -> Option<DateTime<FixedOffset>> {
-    let r = Regex::new(
-        r"^(-?\d{4})-(\d{1,2})-(\d{1,2})[ tT](\d{1,2}):(\d\d):(\d\d)(?:\.(\d*))?\s*(Z|[-+]\d{1,2}:?(?:\d\d)?)?",
-    )
-    .ok()?;
-    let c = r.captures(s)?;
+    let c = RES.time_parts.captures(s)?;
     let (y, mo, d) = (c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?);
     let (h, mi, sec) = (c[4].parse().ok()?, c[5].parse().ok()?, c[6].parse().ok()?);
     let nanos = c

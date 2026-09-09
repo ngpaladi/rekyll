@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike};
 use chrono_tz::{OffsetName, Tz};
 use regex::Regex;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 /// A `Time` together with the zone abbreviation `%Z` should print.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,28 +58,25 @@ pub fn site_timezone(name: Option<&str>) -> Tz {
     }
 }
 
-fn date_regex() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(
-            r"(?x)
-            (\d{4})-(\d{1,2})-(\d{1,2})
-            (?:
-                [\ Tt]+
-                (\d{1,2}):(\d{2})
-                (?::(\d{2}))?
-                (?:\.(\d+))?
-                \s*
-                (Z|z|[-+]\d{1,2}:?\d{2}|[-+]\d{1,2})?
-            )?",
-        )
-        .unwrap()
-    })
-}
+static DATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?x)
+        (\d{4})-(\d{1,2})-(\d{1,2})
+        (?:
+            [\ Tt]+
+            (\d{1,2}):(\d{2})
+            (?::(\d{2}))?
+            (?:\.(\d+))?
+            \s*
+            (Z|z|[-+]\d{1,2}:?\d{2}|[-+]\d{1,2})?
+        )?",
+    )
+    .unwrap()
+});
 
 /// `Utils.parse_date`: parse in, or convert to, the site timezone.
 pub fn parse_date(input: &str, tz: Tz) -> Result<RTime> {
-    let caps = date_regex()
+    let caps = DATE
         .captures(input)
         .ok_or_else(|| anyhow!("Invalid date '{input}'"))?;
 

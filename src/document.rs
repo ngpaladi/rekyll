@@ -9,19 +9,17 @@ use crate::url;
 use crate::value::{Object, Value};
 use regex::Regex;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 /// `Document::DATE_FILENAME_MATCHER`.
-pub fn date_filename_matcher() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(?:.+/)??(\d{2,4}-\d{1,2}-\d{1,2})-([^/]*)(\.[^.]+)$").unwrap())
-}
+pub static DATE_FILENAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:.+/)??(\d{2,4}-\d{1,2}-\d{1,2})-([^/]*)(\.[^.]+)$").unwrap());
 
 /// `Document::DATELESS_FILENAME_MATCHER`.
-pub fn dateless_filename_matcher() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(?:.+/)*(.*)(\.[^.]+)$").unwrap())
-}
+static DATELESS_FILENAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:.+/)*(.*)(\.[^.]+)$").unwrap());
+
+/// A `:placeholder` in a permalink template.
+static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r":([a-z_]+)").unwrap());
 
 #[derive(Debug, Clone)]
 pub struct Document {
@@ -172,12 +170,9 @@ impl UrlDrop {
 /// `URL#generate_url_from_drop`: replace every `:key`, allowing a trailing
 /// underscore to belong to either the key or the literal text after it.
 pub fn generate_url_from_drop(template: &str, drop: &UrlDrop) -> String {
-    static R: OnceLock<Regex> = OnceLock::new();
-    let re = R.get_or_init(|| Regex::new(r":([a-z_]+)").unwrap());
-
     let mut out = String::with_capacity(template.len());
     let mut last = 0;
-    for caps in re.captures_iter(template) {
+    for caps in PLACEHOLDER.captures_iter(template) {
         let whole = caps.get(0).unwrap();
         let name = &caps[1];
         // "/:month_:day" must read as :month followed by "_", so try the key
@@ -241,9 +236,9 @@ pub fn pluralized(data: &Object, singular: &str, plural: &str) -> Vec<String> {
 
 /// `Document#populate_title`: derive title, slug and ext from the filename.
 pub fn populate_title(data: &mut Object, relative_path: &str, basename_without_ext: &str) {
-    let (slug, ext) = if let Some(c) = date_filename_matcher().captures(relative_path) {
+    let (slug, ext) = if let Some(c) = DATE_FILENAME.captures(relative_path) {
         (c[2].to_string(), Some(c[3].to_string()))
-    } else if let Some(c) = dateless_filename_matcher().captures(relative_path) {
+    } else if let Some(c) = DATELESS_FILENAME.captures(relative_path) {
         (c[1].to_string(), Some(c[2].to_string()))
     } else {
         (basename_without_ext.to_string(), None)

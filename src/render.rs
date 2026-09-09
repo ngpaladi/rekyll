@@ -645,8 +645,9 @@ fn extract_excerpt(content: &str, separator: &str) -> String {
         return head.to_string();
     }
 
-    let re = regex::Regex::new(r"(?m)^ {0,3}(\[[^\]]+\])(:.+)$").unwrap();
-    let definitions: Vec<String> = re
+    static DEFINITION: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?m)^ {0,3}(\[[^\]]+\])(:.+)$").unwrap());
+    let definitions: Vec<String> = DEFINITION
         .captures_iter(tail)
         .filter(|c| head.contains(&c[1]))
         .map(|c| format!("{}{}", &c[1], &c[2]))

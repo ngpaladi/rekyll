@@ -11,19 +11,16 @@ use liquid_core::{
 use regex::Regex;
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 /// Maps a source-relative path to the URL it renders at, for `link` and
 /// `post_url`. Built after reading, before rendering.
 pub type UrlIndex = HashMap<String, String>;
 
-fn valid_syntax() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r#"([\w-]+)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|([\w.-]+))"#)
-            .unwrap()
-    })
-}
+/// `IncludeTag::VALID_SYNTAX`: `key="quoted"`, `key='quoted'` or `key=bare`.
+static VALID_SYNTAX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"([\w-]+)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|([\w.-]+))"#).unwrap()
+});
 
 #[derive(Debug, Clone)]
 enum Param {
@@ -47,7 +44,7 @@ fn parse_include_markup(markup: &str) -> IncludeArgs {
     };
 
     let mut params = Vec::new();
-    for caps in valid_syntax().captures_iter(&rest) {
+    for caps in VALID_SYNTAX.captures_iter(&rest) {
         let key = caps[1].to_string();
         let value = if let Some(m) = caps.get(2) {
             Param::Literal(m.as_str().replace("\\\"", "\""))

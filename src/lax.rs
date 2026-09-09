@@ -12,7 +12,6 @@ use liquid::model::{
 };
 use liquid::ValueView;
 use std::fmt;
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub enum LaxValue {
@@ -29,10 +28,7 @@ pub enum LaxValue {
 #[derive(Debug, Clone, Default)]
 pub struct LaxObject(pub indexmap::IndexMap<String, LaxValue>);
 
-fn nil() -> &'static LaxValue {
-    static NIL: OnceLock<LaxValue> = OnceLock::new();
-    NIL.get_or_init(|| LaxValue::Nil)
-}
+static NIL: LaxValue = LaxValue::Nil;
 
 impl LaxObject {
     pub fn new() -> Self {
@@ -261,7 +257,7 @@ impl ObjectView for LaxObject {
     fn get<'s>(&'s self, index: &str) -> Option<&'s dyn ValueView> {
         match self.0.get(index) {
             Some(v) => Some(v as &dyn ValueView),
-            None => Some(nil() as &dyn ValueView),
+            None => Some(&NIL as &dyn ValueView),
         }
     }
 }
