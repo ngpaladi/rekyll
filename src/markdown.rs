@@ -690,6 +690,10 @@ fn unescape_backslashes(s: &str) -> String {
 }
 
 /// Resolve an HTML entity reference to its character.
+///
+/// Kramdown resolves the full HTML4 named set via `kramdown/utils/entities`,
+/// so `&rarr;` and `&frac12;` are as valid as `&amp;`; a hand-written table
+/// would silently leave the long tail unresolved.
 fn decode_entity(body: &str) -> Option<char> {
     if let Some(hex) = body.strip_prefix("#x").or_else(|| body.strip_prefix("#X")) {
         return u32::from_str_radix(hex, 16).ok().and_then(char::from_u32);
@@ -697,35 +701,15 @@ fn decode_entity(body: &str) -> Option<char> {
     if let Some(dec) = body.strip_prefix('#') {
         return dec.parse::<u32>().ok().and_then(char::from_u32);
     }
-    Some(match body {
-        "amp" => '&',
-        "lt" => '<',
-        "gt" => '>',
-        "quot" => '"',
-        "apos" => '\'',
-        "nbsp" => '\u{00A0}',
-        "copy" => '\u{00A9}',
-        "reg" => '\u{00AE}',
-        "trade" => '\u{2122}',
-        "hellip" => '\u{2026}',
-        "mdash" => '\u{2014}',
-        "ndash" => '\u{2013}',
-        "lsquo" => '\u{2018}',
-        "rsquo" => '\u{2019}',
-        "ldquo" => '\u{201C}',
-        "rdquo" => '\u{201D}',
-        "laquo" => '\u{00AB}',
-        "raquo" => '\u{00BB}',
-        "deg" => '\u{00B0}',
-        "middot" => '\u{00B7}',
-        "bull" => '\u{2022}',
-        "dagger" => '\u{2020}',
-        "para" => '\u{00B6}',
-        "sect" => '\u{00A7}',
-        "euro" => '\u{20AC}',
-        "pound" => '\u{00A3}',
-        "yen" => '\u{00A5}',
-        "cent" => '\u{00A2}',
-        _ => return None,
-    })
+    let reference = format!("&{body};");
+    let decoded = html_escape::decode_html_entities(&reference);
+    // An unrecognised reference comes back unchanged.
+    if decoded == reference {
+        return None;
+    }
+    let mut chars = decoded.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
+    }
 }

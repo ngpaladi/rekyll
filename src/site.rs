@@ -466,18 +466,7 @@ impl Site {
 
     /// `Renderer#output_ext` for a document.
     pub fn doc_output_ext(&self, doc: &Document) -> String {
-        if let Some(p) = doc.permalink() {
-            if !p.ends_with('/') {
-                if let Some(e) = Path::new(p).extension() {
-                    return format!(".{}", e.to_string_lossy());
-                }
-            }
-        }
-        if self.is_markdown(&doc.extname) {
-            ".html".to_string()
-        } else {
-            doc.extname.clone()
-        }
+        self.converted_ext(doc.permalink(), &doc.extname)
     }
 
     /// `Document#url`.
@@ -494,18 +483,7 @@ impl Site {
 
     /// `Document#destination`.
     pub fn doc_destination(&self, doc: &Document) -> PathBuf {
-        let u = self.doc_url(doc);
-        let output_ext = self.doc_output_ext(doc);
-        let mut path = self.dest.join(url::unescape_path(&u).trim_start_matches('/'));
-        if u.ends_with('/') {
-            // Documents get index.html, where pages get "index" plus the ext.
-            return path.join("index.html");
-        }
-        let s = path.to_string_lossy().to_string();
-        if !s.ends_with(&output_ext) {
-            path = PathBuf::from(format!("{s}{output_ext}"));
-        }
-        path
+        self.destination(&self.doc_url(doc), &self.doc_output_ext(doc), true)
     }
 
     /// `StaticFile#url`: inside a collection the file is placed by the
@@ -529,8 +507,7 @@ impl Site {
 
     /// `StaticFile#destination`.
     pub fn static_file_destination(&self, file: &StaticFile) -> PathBuf {
-        let u = self.static_file_url(file);
-        self.dest.join(url::unescape_path(&u).trim_start_matches('/'))
+        self.dest.join(url::unescape_path(&self.static_file_url(file)).trim_start_matches('/'))
     }
 
     /// Every document that should be written, in `site.documents` order.
@@ -629,22 +606,24 @@ impl Site {
         self.markdown_exts.iter().any(|m| m.eq_ignore_ascii_case(ext))
     }
 
-    /// `Renderer#output_ext`.
+    /// `Renderer#output_ext`: an explicit permalink with a file extension
+    /// wins, otherwise the converter for the source extension decides.
     pub fn output_ext(&self, page: &Page) -> String {
-        // An explicit permalink with a file extension wins outright.
-        if let Some(p) = page.permalink() {
-            if !p.ends_with('/') {
-                if let Some(e) = Path::new(p).extension() {
-                    return format!(".{}", e.to_string_lossy());
-                }
+        self.converted_ext(page.permalink(), &page.ext)
+    }
+
+    fn converted_ext(&self, permalink: Option<&str>, ext: &str) -> String {
+        if let Some(p) = permalink.filter(|p| !p.ends_with('/')) {
+            if let Some(e) = Path::new(p).extension() {
+                return format!(".{}", e.to_string_lossy());
             }
         }
-        if self.is_markdown(&page.ext) {
+        if self.is_markdown(ext) {
             ".html".to_string()
-        } else if is_sass(&page.ext) {
+        } else if is_sass(ext) {
             ".css".to_string()
         } else {
-            page.ext.clone()
+            ext.to_string()
         }
     }
 
@@ -676,16 +655,23 @@ impl Site {
         url::sanitize_url(&url::generate_url(&template, &placeholders))
     }
 
-    /// `Page#destination`.
+    /// `Page#destination`. A directory URL gets "index" plus the output
+    /// extension, where a document gets "index.html" outright.
     pub fn page_destination(&self, page: &Page) -> PathBuf {
-        let u = self.page_url(page);
-        let output_ext = self.output_ext(page);
-        let mut path = self.dest.join(url::unescape_path(&u).trim_start_matches('/'));
-        if u.ends_with('/') {
+        self.destination(&self.page_url(page), &self.output_ext(page), false)
+    }
+
+    /// Shared by pages, documents and collection static files.
+    fn destination(&self, url_path: &str, output_ext: &str, doc_index: bool) -> PathBuf {
+        let mut path = self.dest.join(url::unescape_path(url_path).trim_start_matches('/'));
+        if url_path.ends_with('/') {
+            if doc_index {
+                return path.join("index.html");
+            }
             path = path.join("index");
         }
         let s = path.to_string_lossy().to_string();
-        if !s.ends_with(&output_ext) {
+        if !s.ends_with(output_ext) {
             path = PathBuf::from(format!("{s}{output_ext}"));
         }
         path

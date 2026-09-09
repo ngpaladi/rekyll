@@ -134,9 +134,9 @@ pub fn all() -> Vec<(&'static str, FilterFn)> {
         ("find", f_find),
         // Overrides of stdlib filters whose Ruby behaviour differs.
         ("date", f_date),
-        ("escape", f_escape),
+        ("escape", f_xml_escape),
         ("escape_once", f_escape_once),
-        ("url_encode", f_url_encode),
+        ("url_encode", f_cgi_escape),
         ("url_decode", f_url_decode),
         ("capitalize", f_capitalize),
         ("split", f_split),
@@ -161,18 +161,14 @@ pub fn all() -> Vec<(&'static str, FilterFn)> {
 /// Pass the input through, but say so on stderr the first time, once per
 /// filter name.
 fn f_unimplemented(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
-    use std::sync::Mutex;
-    static WARNED: Mutex<Option<std::collections::HashSet<&'static str>>> = Mutex::new(None);
-    if let Ok(mut guard) = WARNED.lock() {
-        let seen = guard.get_or_insert_with(std::collections::HashSet::new);
-        if seen.insert("unimplemented") {
-            eprintln!(
-                "       Build Warning: a Jekyll filter rekyll does not implement was used \
-                 (where_exp, group_by_exp, find_exp, sample, sassify or scssify). Its input \
-                 was passed through unchanged, so the output differs from Jekyll's."
-            );
-        }
-    }
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        eprintln!(
+            "       Build Warning: a Jekyll filter rekyll does not implement was used \
+             (where_exp, group_by_exp, find_exp, sample, sassify or scssify). Its input was \
+             passed through unchanged, so the output differs from Jekyll's."
+        );
+    });
     Ok(input.to_value())
 }
 
@@ -221,10 +217,6 @@ fn f_xml_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<V
     ))
 }
 
-fn f_escape(input: &dyn ValueView, a: &[Value], c: &FilterCtx) -> Result<Value> {
-    f_xml_escape(input, a, c)
-}
-
 /// `escape_once` leaves existing entity references alone.
 fn f_escape_once(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
     let text = s(input);
@@ -251,10 +243,6 @@ fn escape_html_ruby(s: &str) -> String {
 /// `cgi_escape` / Liquid's `url_encode`: CGI.escape, where a space is `+`.
 fn f_cgi_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
     Ok(Value::scalar(cgi_escape(&s(input))))
-}
-
-fn f_url_encode(input: &dyn ValueView, a: &[Value], c: &FilterCtx) -> Result<Value> {
-    f_cgi_escape(input, a, c)
 }
 
 fn cgi_escape(input: &str) -> String {
@@ -321,27 +309,37 @@ fn f_array_to_sentence_string(
 }
 
 fn f_jsonify(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
-    Ok(Value::scalar(to_json(&to_rvalue(input))))
+    Ok(Value::scalar(render_value(&to_rvalue(input), true)))
 }
 
-fn to_json(v: &RValue) -> String {
+/// Render a value as JSON (`jsonify`) or as Ruby's `inspect`. The walks are
+/// the same shape; only string quoting and the hash separator differ.
+fn render_value(v: &RValue, json: bool) -> String {
+    let sep = if json { ":" } else { "=>" };
     match v {
-        RValue::Null => "null".into(),
+        RValue::Null => if json { "null" } else { "nil" }.to_string(),
         RValue::Bool(b) => b.to_string(),
         RValue::Int(i) => i.to_string(),
         RValue::Float(x) => crate::value::ruby_float_to_s(*x),
         RValue::Str(s) => json_string(s),
-        RValue::Date { .. } => json_string(&v.to_string()),
-        RValue::Array(a) => {
-            format!("[{}]", a.iter().map(to_json).collect::<Vec<_>>().join(","))
+        RValue::Date { .. } => {
+            if json {
+                json_string(&v.to_string())
+            } else {
+                v.to_string()
+            }
         }
-        RValue::Object(o) => format!(
-            "{{{}}}",
-            o.iter()
-                .map(|(k, val)| format!("{}:{}", json_string(k), to_json(val)))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
+        RValue::Array(a) => {
+            let items: Vec<String> = a.iter().map(|x| render_value(x, json)).collect();
+            format!("[{}]", items.join(if json { "," } else { ", " }))
+        }
+        RValue::Object(o) => {
+            let items: Vec<String> = o
+                .iter()
+                .map(|(k, val)| format!("{}{sep}{}", json_string(k), render_value(val, json)))
+                .collect();
+            format!("{{{}}}", items.join(if json { "," } else { ", " }))
+        }
     }
 }
 
@@ -371,10 +369,7 @@ fn f_to_integer(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<V
         RValue::Float(x) => x.trunc() as i64,
         RValue::Bool(true) => 1,
         RValue::Bool(false) => 0,
-        other => {
-            let text = other.to_string();
-            leading_number(&text).map(|x| x.trunc() as i64).unwrap_or(0)
-        }
+        other => leading_number(&other.to_string()).map(|x| x.trunc() as i64).unwrap_or(0),
     };
     Ok(Value::scalar(n))
 }
@@ -398,28 +393,7 @@ fn leading_number(s: &str) -> Option<f64> {
 
 /// `inspect`: Ruby's `Object#inspect`, then HTML-escaped by Jekyll.
 fn f_inspect(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {
-    Ok(Value::scalar(escape_html_ruby(&ruby_inspect(&to_rvalue(input)))))
-}
-
-fn ruby_inspect(v: &RValue) -> String {
-    match v {
-        RValue::Null => "nil".into(),
-        RValue::Bool(b) => b.to_string(),
-        RValue::Int(i) => i.to_string(),
-        RValue::Float(x) => crate::value::ruby_float_to_s(*x),
-        RValue::Str(s) => format!("{s:?}"),
-        RValue::Date { .. } => v.to_string(),
-        RValue::Array(a) => {
-            format!("[{}]", a.iter().map(ruby_inspect).collect::<Vec<_>>().join(", "))
-        }
-        RValue::Object(o) => format!(
-            "{{{}}}",
-            o.iter()
-                .map(|(k, val)| format!("{:?}=>{}", k, ruby_inspect(val)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
+    Ok(Value::scalar(escape_html_ruby(&render_value(&to_rvalue(input), false))))
 }
 
 fn f_normalize_whitespace(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx) -> Result<Value> {

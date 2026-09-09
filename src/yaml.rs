@@ -217,101 +217,78 @@ fn parse_time(s: &str) -> Option<DateTime<FixedOffset>> {
 // Document loading
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-enum Node {
-    Scalar(Value),
-    Seq(Vec<Node>),
-    Map(Vec<(Node, Node)>),
-}
-
-impl Node {
-    fn into_value(self) -> Value {
-        match self {
-            Node::Scalar(v) => v,
-            Node::Seq(items) => Value::Array(items.into_iter().map(Node::into_value).collect()),
-            Node::Map(pairs) => {
-                let mut o = Object::new();
-                for (k, v) in pairs {
-                    // Ruby hash keys here are whatever YAML resolved them to;
-                    // Jekyll only ever reads string keys, so stringify.
-                    let key = match k.into_value() {
-                        Value::Str(s) => s,
-                        other => other.to_string(),
-                    };
-                    o.insert(key, v.into_value());
-                }
-                Value::Object(o)
-            }
-        }
-    }
-}
-
+/// Builds a `Value` directly from the parser's event stream. `Value::Object`
+/// is insertion-ordered, so no intermediate tree is needed.
 #[derive(Default)]
 struct Loader {
-    docs: Vec<Node>,
-    stack: Vec<Node>,
-    keys: Vec<Option<Node>>,
-    anchors: std::collections::HashMap<usize, Node>,
-    /// Anchor ids for containers that are open but not yet finished; the node
-    /// only exists at its end event, but the id arrives at its start.
+    docs: Vec<Value>,
+    /// Containers currently open, innermost last.
+    stack: Vec<Value>,
+    /// Pending mapping key for each open mapping.
+    keys: Vec<Option<Value>>,
+    anchors: std::collections::HashMap<usize, Value>,
+    /// Anchor ids for containers that are open but not yet finished; the id
+    /// arrives at the start event, the finished value only at the end.
     open_anchors: Vec<usize>,
-    error: Option<String>,
 }
 
 impl Loader {
-    fn push(&mut self, node: Node, anchor: usize) {
+    fn push(&mut self, value: Value, anchor: usize) {
         if anchor > 0 {
-            self.anchors.insert(anchor, node.clone());
+            self.anchors.insert(anchor, value.clone());
         }
         match self.stack.last_mut() {
-            None => self.docs.push(node),
-            Some(Node::Seq(items)) => items.push(node),
-            Some(Node::Map(pairs)) => {
+            None => self.docs.push(value),
+            Some(Value::Array(items)) => items.push(value),
+            Some(Value::Object(pairs)) => {
                 let slot = self.keys.last_mut().expect("map without key slot");
                 match slot.take() {
-                    None => *slot = Some(node),
-                    Some(key) => pairs.push((key, node)),
+                    None => *slot = Some(value),
+                    Some(key) => {
+                        // Jekyll only ever reads string keys.
+                        let key = match key {
+                            Value::Str(s) => s,
+                            other => other.to_string(),
+                        };
+                        pairs.insert(key, value);
+                    }
                 }
             }
-            Some(Node::Scalar(_)) => unreachable!("scalar cannot contain children"),
+            Some(_) => unreachable!("scalar cannot contain children"),
         }
     }
 
+    fn open(&mut self, container: Value, anchor: usize) {
+        self.open_anchors.push(anchor);
+        if matches!(container, Value::Object(_)) {
+            self.keys.push(None);
+        }
+        self.stack.push(container);
+    }
+
+    fn close(&mut self) {
+        let Some(value) = self.stack.pop() else { return };
+        if matches!(value, Value::Object(_)) {
+            self.keys.pop();
+        }
+        let anchor = self.open_anchors.pop().unwrap_or(0);
+        self.push(value, anchor);
+    }
 }
 
 impl MarkedEventReceiver for Loader {
     fn on_event(&mut self, ev: Event, _mark: Marker) {
-        if self.error.is_some() {
-            return;
-        }
         match ev {
             Event::Scalar(text, style, anchor, tag) => {
                 let v = resolve_scalar(&text, style, tag.as_ref());
-                self.push(Node::Scalar(v), anchor);
+                self.push(v, anchor);
             }
-            Event::SequenceStart(anchor, _) => {
-                self.open_anchors.push(anchor);
-                self.stack.push(Node::Seq(Vec::new()));
-            }
-            Event::MappingStart(anchor, _) => {
-                self.open_anchors.push(anchor);
-                self.stack.push(Node::Map(Vec::new()));
-                self.keys.push(None);
-            }
-            Event::SequenceEnd | Event::MappingEnd => {
-                let node = match self.stack.pop() {
-                    Some(n) => n,
-                    None => return,
-                };
-                if matches!(node, Node::Map(_)) {
-                    self.keys.pop();
-                }
-                let anchor = self.open_anchors.pop().unwrap_or(0);
-                self.push(node, anchor);
-            }
+            Event::SequenceStart(anchor, _) => self.open(Value::Array(Vec::new()), anchor),
+            Event::MappingStart(anchor, _) => self.open(Value::Object(Object::new()), anchor),
+            Event::SequenceEnd | Event::MappingEnd => self.close(),
             Event::Alias(id) => {
-                if let Some(n) = self.anchors.get(&id).cloned() {
-                    self.push(n, 0);
+                if let Some(v) = self.anchors.get(&id).cloned() {
+                    self.push(v, 0);
                 }
             }
             _ => {}
@@ -349,12 +326,8 @@ fn resolve_scalar(text: &str, style: TScalarStyle, tag: Option<&yaml_rust2::pars
 /// Load a single YAML document, returning `Value::Null` for an empty stream.
 pub fn load(src: &str) -> Result<Value> {
     let mut loader = Loader::default();
-    let mut parser = Parser::new_from_str(src);
-    parser
+    Parser::new_from_str(src)
         .load(&mut loader, true)
         .map_err(|e| anyhow!("YAML parse error: {e}"))?;
-    if let Some(e) = loader.error {
-        return Err(anyhow!(e));
-    }
-    Ok(loader.docs.into_iter().next().map(Node::into_value).unwrap_or(Value::Null))
+    Ok(loader.docs.into_iter().next().unwrap_or(Value::Null))
 }

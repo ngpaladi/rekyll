@@ -12,6 +12,7 @@ chrono-tz = "0.10"
 clap = { version = "4", features = ["derive"] }
 globset = "0.4.20"
 grass = { version = "0.13.4", default-features = false, features = ["random"] }
+html-escape = "0.2.15"
 indexmap = "2.14.2"
 liquid = "0.26"
 liquid-core = "0.26"
