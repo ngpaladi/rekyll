@@ -169,15 +169,8 @@ fn base60(s: &str, float: bool) -> f64 {
 }
 
 fn leading_i64(s: &str) -> i64 {
-    let mut end = 0;
-    for (i, c) in s.char_indices() {
-        if c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+')) {
-            end = i + c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    s[..end].parse::<i64>().unwrap_or(0)
+    let end = s.char_indices().find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && "+-".contains(c)))).map_or(s.len(), |(i, _)| i);
+    s[..end].parse().unwrap_or(0)
 }
 
 /// Psych::ScalarScanner#parse_time.
@@ -199,17 +192,7 @@ fn parse_time(s: &str) -> Option<DateTime<FixedOffset>> {
     // No zone marker means UTC in Psych (it builds a UTC Time, then `Time.at`).
     let offset_secs = match c.get(8).map(|m| m.as_str()) {
         None | Some("Z") => 0,
-        Some(tz) => {
-            let tzr = Regex::new(r"^([+\-]?\d{1,2}):?(\d{1,2})?$").ok()?;
-            let tc = tzr.captures(tz)?;
-            let hh: i32 = tc[1].parse().ok()?;
-            let mm: i32 = tc.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-            if hh < 0 {
-                hh * 3600 - mm * 60
-            } else {
-                hh * 3600 + mm * 60
-            }
-        }
+        Some(tz) => crate::time::parse_offset(tz).ok()?,
     };
     let off = FixedOffset::east_opt(offset_secs)?;
     Some(off.from_utc_datetime(&(naive - chrono::Duration::seconds(offset_secs as i64))))

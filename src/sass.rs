@@ -24,30 +24,15 @@ pub struct Options {
 
 impl Options {
     pub fn from_site(site: &Site) -> Options {
-        let sass_dir = site
-            .config
-            .get("sass")
-            .and_then(|s| s.get("sass_dir"))
-            .and_then(crate::value::Value::as_str)
-            .unwrap_or("_sass");
-
-        let mut load_paths = vec![site.source.join(sass_dir)];
-        if let Some(extra) = site.config.get("sass").and_then(|s| s.get("load_paths")) {
-            for p in crate::document::string_list(Some(extra)) {
-                load_paths.push(site.source.join(p));
-            }
+        let sass = site.config.get("sass");
+        let setting = |key, default: &str| {
+            sass.and_then(|s| s.get(key)).and_then(crate::value::Value::as_str).unwrap_or(default).to_string()
+        };
+        let mut load_paths = vec![site.source.join(setting("sass_dir", "_sass"))];
+        for p in crate::document::string_list(sass.and_then(|s| s.get("load_paths"))) {
+            load_paths.push(site.source.join(p));
         }
-
-        let style = site
-            .config
-            .get("sass")
-            .and_then(|s| s.get("style"))
-            .and_then(crate::value::Value::as_str)
-            .unwrap_or("compact")
-            .trim_start_matches(':')
-            .to_string();
-
-        Options { load_paths, style }
+        Options { load_paths, style: setting("style", "compact").trim_start_matches(':').to_string() }
     }
 }
 
@@ -57,29 +42,19 @@ pub fn compile(site: &Site, source: &str, indented: bool) -> Result<String> {
 }
 
 pub fn compile_with(opts: &Options, source: &str, indented: bool) -> Result<String> {
-    let load_paths = opts.load_paths.clone();
-    let style = opts.style.clone();
-
-    let mut options = grass::Options::default().style(grass::OutputStyle::Expanded);
-    for p in &load_paths {
+    let compressed = opts.style == "compressed";
+    let mut options = grass::Options::default()
+        .style(if compressed { grass::OutputStyle::Compressed } else { grass::OutputStyle::Expanded });
+    for p in &opts.load_paths {
         options = options.load_path(p);
     }
     if indented {
         options = options.input_syntax(grass::InputSyntax::Sass);
     }
-
-    let expanded = grass::from_string(source.to_string(), &options)
-        .map_err(|e| anyhow!("Sass error: {e}"))?;
-
-    Ok(match style.as_str() {
-        "compressed" => {
-            grass::from_string(source.to_string(), &options.style(grass::OutputStyle::Compressed))
-                .map_err(|e| anyhow!("Sass error: {e}"))?
-        }
-        "expanded" | "nested" => expanded,
-        // libsass's `:compact`, jekyll-sass-converter's default under sassc.
-        _ => to_compact(&expanded),
-    })
+    let css = grass::from_string(source.to_string(), &options).map_err(|e| anyhow!("Sass error: {e}"))?;
+    // libsass's `:compact`, jekyll-sass-converter's default under sassc.
+    let compact = !compressed && !matches!(opts.style.as_str(), "expanded" | "nested");
+    Ok(if compact { to_compact(&css) } else { css })
 }
 
 /// Reformat expanded CSS as libsass's `:compact` style.
@@ -189,18 +164,5 @@ fn find_comment_end(chars: &[char], from: usize) -> usize {
 
 /// Collapse a block's internal whitespace so it sits on one line.
 fn collapse(block: &str) -> String {
-    let mut out = String::with_capacity(block.len());
-    let mut last_space = true;
-    for c in block.chars() {
-        if c.is_whitespace() {
-            if !last_space {
-                out.push(' ');
-            }
-            last_space = true;
-        } else {
-            out.push(c);
-            last_space = false;
-        }
-    }
-    out.trim().to_string()
+    block.split_whitespace().collect::<Vec<_>>().join(" ")
 }

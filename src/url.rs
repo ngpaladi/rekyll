@@ -54,20 +54,8 @@ pub fn sanitize_url(s: &str) -> String {
 }
 
 fn squeeze_slashes(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_slash = false;
-    for c in s.chars() {
-        if c == '/' {
-            if !prev_slash {
-                out.push(c);
-            }
-            prev_slash = true;
-        } else {
-            out.push(c);
-            prev_slash = false;
-        }
-    }
-    out
+    let mut prev = ' ';
+    s.chars().filter(|&c| { let keep = !(c == '/' && prev == '/'); prev = c; keep }).collect()
 }
 
 /// `URL#generate_url_from_hash`: substitute `:key` placeholders in order,

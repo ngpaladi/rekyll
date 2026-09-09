@@ -4,8 +4,8 @@
 
 use crate::config::{deep_merge, Config, Defaults};
 use crate::document::{
-    categories_from_path, generate_url_from_drop, pluralized, populate_title, Collection, Document,
-    UrlDrop, DATE_FILENAME,
+    categories_from_path, generate_url_from_drop, pluralized, populate_title, url_drop, Collection, Document,
+    DATE_FILENAME,
 };
 use crate::time::{parse_date, site_timezone, RTime};
 use crate::url;
@@ -418,7 +418,7 @@ impl Site {
     pub fn doc_url(&self, doc: &Document) -> String {
         let collection = self.collection_of(doc);
         let output_ext = self.doc_output_ext(doc);
-        let drop = UrlDrop::new(doc, collection, &output_ext);
+        let drop = url_drop(doc, collection, &output_ext);
         let template = match doc.permalink() {
             Some(p) => p.to_string(),
             None => collection.url_template(&self.permalink_style()),

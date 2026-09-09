@@ -124,24 +124,17 @@ pub fn in_zone(utc_naive: NaiveDateTime, tz: Tz) -> RTime {
 /// Interpret a wall-clock time as local to `tz`, resolving DST gaps the way
 /// Ruby does by taking the earlier of two candidate instants.
 fn local_to_utc(naive: NaiveDateTime, tz: Tz) -> Result<NaiveDateTime> {
-    use chrono::LocalResult;
-    match tz.from_local_datetime(&naive) {
-        LocalResult::Single(t) => Ok(t.naive_utc()),
-        LocalResult::Ambiguous(a, _) => Ok(a.naive_utc()),
-        LocalResult::None => {
-            // The wall-clock time does not exist (spring-forward gap); shift
-            // forward an hour to land on a real instant.
-            let shifted = naive + chrono::Duration::hours(1);
-            match tz.from_local_datetime(&shifted) {
-                LocalResult::Single(t) => Ok(t.naive_utc()),
-                LocalResult::Ambiguous(a, _) => Ok(a.naive_utc()),
-                LocalResult::None => Err(anyhow!("Unresolvable local time")),
-            }
-        }
-    }
+    // A wall-clock time in a spring-forward gap does not exist; an hour later
+    // does, which is where Ruby lands too.
+    tz.from_local_datetime(&naive)
+        .earliest()
+        .or_else(|| tz.from_local_datetime(&(naive + chrono::Duration::hours(1))).earliest())
+        .map(|t| t.naive_utc())
+        .ok_or_else(|| anyhow!("Unresolvable local time"))
 }
 
-fn parse_offset(z: &str) -> Result<i32> {
+/// A numeric zone offset (`+05`, `-0530`, `+05:30`) in seconds.
+pub fn parse_offset(z: &str) -> Result<i32> {
     let sign = if z.starts_with('-') { -1 } else { 1 };
     let body = z.trim_start_matches(['+', '-']).replace(':', "");
     let (h, m) = match body.len() {

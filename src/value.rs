@@ -96,7 +96,11 @@ impl fmt::Display for Value {
                 }
                 Ok(())
             }
-            Value::Object(_) => write!(f, "{}", ruby_hash_to_s(self)),
+            // Ruby's Hash#to_s, only reached by pathological templates.
+            Value::Object(o) => {
+                let inner: Vec<String> = o.iter().map(|(k, v)| format!("{k:?} => {v}")).collect();
+                write!(f, "{{{}}}", inner.join(", "))
+            }
         }
     }
 }
@@ -126,17 +130,5 @@ pub fn ruby_time_to_s(at: &DateTime<FixedOffset>, date_only: bool) -> String {
         at.format("%Y-%m-%d").to_string()
     } else {
         at.format("%Y-%m-%d %H:%M:%S %z").to_string()
-    }
-}
-
-fn ruby_hash_to_s(v: &Value) -> String {
-    // Only reached for pathological templates; Ruby renders `{"k" => v}`.
-    match v {
-        Value::Object(o) => {
-            let inner: Vec<String> =
-                o.iter().map(|(k, val)| format!("{:?} => {}", k, val)).collect();
-            format!("{{{}}}", inner.join(", "))
-        }
-        _ => String::new(),
     }
 }

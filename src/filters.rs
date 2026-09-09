@@ -214,23 +214,7 @@ fn eval_expr(
 
 /// Does the expression reference this identifier as a whole word?
 fn mentions(expression: &str, name: &str) -> bool {
-    let bytes = expression.as_bytes();
-    let mut from = 0;
-    while let Some(i) = expression[from..].find(name) {
-        let start = from + i;
-        let end = start + name.len();
-        let before_ok = start == 0 || !is_ident(bytes[start - 1]);
-        let after_ok = end == bytes.len() || !is_ident(bytes[end]);
-        if before_ok && after_ok {
-            return true;
-        }
-        from = end;
-    }
-    false
-}
-
-fn is_ident(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+    expression.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == name)
 }
 
 /// The `variable, expression` arguments of the `_exp` filters, evaluated
@@ -389,17 +373,10 @@ fn f_cgi_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Ru
 }
 
 fn cgi_escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for b in input.bytes() {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
+    // Everything but unreserved characters is encoded, then a space is `+`.
+    const ESCAPE: &percent_encoding::AsciiSet =
+        &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+    percent_encoding::utf8_percent_encode(input, ESCAPE).to_string().replace("%20", "+")
 }
 
 fn f_url_decode(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
@@ -413,19 +390,11 @@ fn f_url_decode(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Ru
 
 /// `uri_escape`: Addressable's normalize, which leaves sub-delimiters alone.
 fn f_uri_escape(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    const KEEP: &str = "!#$&'()*+,-./:;=?@_~";
-    let mut out = String::new();
-    for ch in s(input).chars() {
-        if ch.is_ascii_alphanumeric() || KEEP.contains(ch) {
-            out.push(ch);
-        } else {
-            let mut buf = [0u8; 4];
-            for b in ch.encode_utf8(&mut buf).as_bytes() {
-                out.push_str(&format!("%{b:02X}"));
-            }
-        }
-    }
-    Ok(Value::scalar(out))
+    const ESCAPE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'!').remove(b'#').remove(b'$').remove(b'&').remove(b'\'').remove(b'(').remove(b')')
+        .remove(b'*').remove(b'+').remove(b',').remove(b'-').remove(b'.').remove(b'/').remove(b':')
+        .remove(b';').remove(b'=').remove(b'?').remove(b'@').remove(b'_').remove(b'~');
+    Ok(Value::scalar(percent_encoding::utf8_percent_encode(&s(input), ESCAPE).to_string()))
 }
 
 fn f_number_of_words(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
@@ -652,34 +621,27 @@ fn unless_nil(input: &dyn ValueView, f: impl Fn(&str) -> String) -> Value {
 
 // -- arrays -----------------------------------------------------------------
 
-fn f_push(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
+// Ruby's Array#push/pop/shift/unshift on a copy of the input.
+fn array_op(input: &dyn ValueView, op: impl FnOnce(&mut Vec<Value>)) -> Result<Value> {
     let mut a = array_of(input);
-    if let Some(v) = args.first() {
-        a.push(v.clone());
-    }
+    op(&mut a);
     Ok(Value::Array(a))
+}
+
+fn f_push(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
+    array_op(input, |a| a.extend(args.first().cloned()))
 }
 
 fn f_pop(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    let mut a = array_of(input);
-    a.pop();
-    Ok(Value::Array(a))
+    array_op(input, |a| drop(a.pop()))
 }
 
 fn f_shift(input: &dyn ValueView, _a: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    let mut a = array_of(input);
-    if !a.is_empty() {
-        a.remove(0);
-    }
-    Ok(Value::Array(a))
+    array_op(input, |a| drop(a.drain(..1.min(a.len()))))
 }
 
 fn f_unshift(input: &dyn ValueView, args: &[Value], _c: &FilterCtx, _r: &dyn Runtime) -> Result<Value> {
-    let mut a = array_of(input);
-    if let Some(v) = args.first() {
-        a.insert(0, v.clone());
-    }
-    Ok(Value::Array(a))
+    array_op(input, |a| a.splice(0..0, args.first().cloned()).for_each(drop))
 }
 
 /// `where`: select items whose property equals the given value, comparing as

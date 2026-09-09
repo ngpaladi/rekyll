@@ -86,7 +86,7 @@ fn spawn_watcher(source: PathBuf, destination: PathBuf) {
             match crate::build::build(&source, &destination) {
                 Ok(()) => {
                     GENERATION.fetch_add(1, Ordering::SeqCst);
-                    println!("      Regenerated: {}", now_hms());
+                    println!("      Regenerated: {}", chrono::Utc::now().format("%H:%M:%S UTC"));
                 }
                 Err(e) => eprintln!("       Build Error: {e:#}"),
             }
@@ -124,15 +124,6 @@ fn fingerprint(source: &Path, destination: &Path) -> (usize, u64) {
         }
     }
     (count, newest)
-}
-
-fn now_hms() -> String {
-    let secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
-    format!("{h:02}:{m:02}:{s:02} UTC")
 }
 
 /// Build the response for one request: a file under `root`, the generation

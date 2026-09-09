@@ -94,12 +94,7 @@ impl Collection {
 }
 
 /// The `UrlDrop`: the placeholder values a permalink template can reference.
-pub struct UrlDrop {
-    values: Object,
-}
-
-impl UrlDrop {
-    pub fn new(doc: &Document, collection: &Collection, output_ext: &str) -> UrlDrop {
+pub fn url_drop(doc: &Document, collection: &Collection, output_ext: &str) -> Object {
         let mut v = Object::new();
         let basename = doc.basename_without_ext();
 
@@ -159,17 +154,12 @@ impl UrlDrop {
             v.insert(key.into(), Value::str(d.format(fmt)));
         }
 
-        UrlDrop { values: v }
-    }
-
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.values.get(key)
-    }
+        v
 }
 
 /// `URL#generate_url_from_drop`: replace every `:key`, allowing a trailing
 /// underscore to belong to either the key or the literal text after it.
-pub fn generate_url_from_drop(template: &str, drop: &UrlDrop) -> String {
+pub fn generate_url_from_drop(template: &str, drop: &Object) -> String {
     let mut out = String::with_capacity(template.len());
     let mut last = 0;
     for caps in PLACEHOLDER.captures_iter(template) {
