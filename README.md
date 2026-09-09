@@ -12,7 +12,7 @@ than against expectations.
 
 ```
 $ ./tests/harness/all.sh
-=== rekyll differential harness (10 fixtures) ===
+=== rekyll differential harness (11 fixtures) ===
   [ OK ] 01-static          static files, include/exclude rules
   [ OK ] 02-page-layout     layouts, layout chains, CRLF front matter
   [ OK ] 03-posts           permalinks, categories, tags, publishing
@@ -27,6 +27,9 @@ $ ./tests/harness/all.sh
 === 11 passed, 0 failed ===
 === MARKDOWN IDENTICAL ===
 === FILTERS IDENTICAL ===
+=== YAML SCALARS IDENTICAL ===
+=== STRFTIME IDENTICAL ===
+=== SERVE OK ===
 ```
 
 ## Usage
@@ -51,8 +54,8 @@ construction. To read it locally:
 rekyll serve -s docs -d docs/_site          # http://127.0.0.1:4000
 ```
 
-`serve` is a default Cargo feature that adds no dependencies; build with
-`--no-default-features` for a build-only binary. It watches the source and
+`serve` is a default Cargo feature (it pulls in `tiny_http` and
+`mime_guess`); build with `--no-default-features` for a build-only binary. It watches the source and
 rebuilds, and the served HTML carries a small polling script so the browser
 reloads itself; `--no-watch` and `--no-livereload` turn those off. The script
 is added to the response, never to the file on disk, so builds still compare
@@ -123,6 +126,19 @@ covered by fixture 09.
 CoffeeScript, TOML config, non-YAML data files, and incremental builds.
 `sample` works but cannot match Jekyll, whose own is unseeded.
 
+## Distributing the binary
+
+The release binary is statically linked apart from libc, so it can be copied
+anywhere. Everything compiled into it is MIT, Apache-2.0, BSD, Zlib or
+Unlicense, and `THIRD_PARTY_LICENSES.md` lists each crate with its license
+text. That file is embedded, so a shipped binary carries its own attribution:
+
+```
+rekyll licenses
+```
+
+Regenerate it after changing `Cargo.toml` with `scripts/licenses.py`.
+
 ## Determinism
 
 Identical input must give identical output on every run, which turned out to
@@ -141,8 +157,11 @@ from the same source. `vendor/liquid-core` fixes this at the root.
 ## `vendor/liquid-core`
 
 Liquid itself is a dependency, not a rewrite — but seven changes to
-liquid-core 0.26.11 were needed, each wired in through `[patch.crates-io]`
-and marked with a `rekyll:` comment:
+liquid-core 0.26.11 were needed. `vendor/rekyll-liquid-core.patch` (about 250
+lines) is the source of truth; `scripts/vendor.sh` rebuilds the checked-in
+`vendor/liquid-core` from the pristine crates.io tarball plus that patch, and
+`[patch.crates-io]` wires it in. Each change is marked with a `rekyll:`
+comment:
 
 1. **`Object` uses `IndexMap`** instead of `HashMap`, so hash iteration order
    is stable and matches Ruby's insertion order.
@@ -187,33 +206,40 @@ The harnesses are the specification.
 | `tests/harness/diff.sh [fixture…]` | full `_site` trees, `jekyll build` vs `rekyll build` |
 | `tests/harness/md_diff.sh` | the Markdown corpus against kramdown 2.4 + GFM |
 | `tests/harness/filters_diff.sh` | filter expressions against Ruby Liquid 5.4 |
+| `tests/harness/units_diff.sh` | YAML scalars against Psych; strftime against Ruby's `Time#strftime` |
+| `tests/harness/serve_smoke.sh` | `rekyll serve`: routing, traversal refusal, reload injection |
 
 Requires `jekyll` (4.3.2) on `PATH`. Fixtures pin `timezone` and `time` in
 `_config.yml`, without which Jekyll's own output depends on the wall clock and
 the local timezone.
 
-Two smaller differentials run as part of the suite too
-(`tests/harness/units_diff.sh`): `examples/scalars.rs` against
-`tests/harness/psych_ref.rb`, and `examples/strftime_dump.rs` against
-`tests/harness/strftime_ref.rb`.
-
 ## Layout
 
+In the order a build touches them:
+
 ```
+src/main.rs       the CLI: build, serve, licenses
+src/build.rs      read, render, clean, write
+src/config.rs     Jekyll's DEFAULTS, merge order, front-matter defaults
+src/value.rs      the YAML/Ruby value type (ordered hashes, Time)
 src/yaml.rs       YAML 1.1 scalar resolution, ported from Psych
-src/config.rs     Jekyll's DEFAULTS and merge order
-src/site.rs       reading, front matter, entry filtering, URLs, destinations
+src/site.rs       reading: front matter, entry filtering, pages, URLs
 src/document.rs   collections, posts, permalink placeholders
 src/url.rs        permalink escaping, relative_url/absolute_url, slugify
-src/render.rs     payload assembly, layout chain, excerpts
-src/lax.rs        Liquid values with Jekyll's lax lookup semantics
-src/markdown.rs   Kramdown-compatible emitter over pulldown-cmark
-src/filters.rs    Jekyll's filters and Ruby-behaviour overrides
 src/time.rs       Ruby Time semantics; strftime via the strftime-ruby crate
+src/render.rs     payload assembly, Liquid, converters, layout chain, excerpts
+src/lax.rs        Liquid values with Jekyll's lax lookup semantics
+src/filters.rs    Jekyll's filters and Ruby-behaviour overrides
+src/tags.rs       include, include_relative, link, post_url, highlight
+src/markdown.rs   Kramdown-compatible emitter over pulldown-cmark
 src/sass.rs       Sass via grass, reformatted to libsass :compact
+src/serve.rs      the preview server (tiny_http), watcher, live reload
 ```
+
+`docs/how-it-works/` walks through the same list stage by stage.
 
 ## License
 
 MIT. `vendor/liquid-core` is liquid-core 0.26.11 (MIT OR Apache-2.0) with the
-changes listed above.
+changes listed above. Third-party licenses: `THIRD_PARTY_LICENSES.md`, or
+`rekyll licenses`.

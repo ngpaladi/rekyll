@@ -2,8 +2,7 @@
 //!
 //! Mirrors `jekyll/site.rb`, `reader.rb`, `page.rb` and `renderer.rb`.
 
-use crate::config::{deep_merge, Config};
-use crate::defaults::Defaults;
+use crate::config::{deep_merge, Config, Defaults};
 use crate::document::{
     categories_from_path, date_filename_matcher, generate_url_from_drop,
     pluralized, populate_title, Collection, Document, UrlDrop,

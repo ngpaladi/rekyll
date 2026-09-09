@@ -9,7 +9,6 @@ pub mod markdown;
 pub mod build;
 pub mod time;
 pub mod document;
-pub mod defaults;
 pub mod tags;
 pub mod filters;
 pub mod sass;
