@@ -39,7 +39,7 @@ run_one() {
 
 names=("$@")
 if [ ${#names[@]} -eq 0 ]; then
-  mapfile -t names < <(cd "$FIXTURES" && ls -1d */ 2>/dev/null | sed 's#/##' | sort)
+  mapfile -t names < <(cd "$FIXTURES" && for e in *; do [ -d "$e" ] && echo "$e"; done | sort)
 fi
 
 echo "=== rekyll differential harness (${#names[@]} fixtures) ==="

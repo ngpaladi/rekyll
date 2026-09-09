@@ -24,6 +24,11 @@ yaml-rust2 = "0.12"
 
 [profile.release]
 opt-level = 3
+# A single self-contained executable: no Ruby, no gems, nothing to install
+# alongside it.
+lto = true
+codegen-units = 1
+strip = true
 
 [patch.crates-io]
 liquid-core = { path = "vendor/liquid-core" }

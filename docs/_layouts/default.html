@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title %}{{ page.title | escape }} · {% endif %}{{ site.title | escape }}</title>
+<meta name="description" content="{{ page.description | default: site.description | escape }}">
+<link rel="stylesheet" href="{{ "/assets/css/main.css" | relative_url }}">
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="{{ "/" | relative_url }}">{{ site.title }}</a>
+  <p class="tagline">{{ site.description }}</p>
+  {% include nav.html %}
+</header>
+<main class="wrap">
+{{ content }}
+</main>
+<footer class="foot">
+  <p>Built by rekyll {{ site.time | date: "%Y-%m-%d" }} · {{ site.pages | size }} pages, {{ site.posts | size }} notes</p>
+  <p>Output verified byte-identical against Jekyll {{ jekyll.version }}.</p>
+</footer>
+</body>
+</html>

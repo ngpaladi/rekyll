@@ -41,7 +41,7 @@ pub fn convert_opts(content: &str, smart: bool) -> String {
 
 /// The `smartify` filter: typographic substitution with no block parsing.
 pub fn smartify_text(text: &str) -> String {
-    smartify(text)
+    smartify(text, None)
 }
 
 /// Kramdown's default `syntax_highlighter_opts.default_lang`, which Jekyll
@@ -366,7 +366,14 @@ impl<'a> Emitter<'a> {
                     let to = events[j - 1].1.end;
                     let raw = self.source.get(from..to);
                     match raw {
-                        Some(raw) => self.out.push_str(&self.render_text_run(raw)),
+                        Some(raw) => {
+                            // Whether a quote opens or closes depends on what
+                            // precedes it in the source, which may be markup
+                            // this run does not contain (a closing backtick,
+                            // say). Start-of-block counts as whitespace.
+                            let preceding = self.source[..from].chars().next_back();
+                            self.out.push_str(&self.render_text_run(raw, preceding))
+                        }
                         None => {
                             for (e, _) in &events[i..j] {
                                 if let Event::Text(t) = e {
@@ -428,14 +435,17 @@ impl<'a> Emitter<'a> {
     /// Render a run of source text: resolve backslash escapes, apply
     /// typographic substitutions, and turn entity references into the literal
     /// characters `entity_output: as_char` asks for.
-    fn render_text_run(&self, raw: &str) -> String {
+    fn render_text_run(&self, raw: &str, preceding: Option<char>) -> String {
         let entity = regex::Regex::new(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);").unwrap();
 
         let mut out = String::with_capacity(raw.len());
         let mut last = 0;
+        let mut prev = preceding;
         for caps in entity.captures_iter(raw) {
             let whole = caps.get(0).unwrap();
-            out.push_str(&self.plain_segment(&raw[last..whole.start()]));
+            let segment = &raw[last..whole.start()];
+            out.push_str(&self.plain_segment(segment, prev));
+            prev = segment.chars().next_back().or(prev);
             match decode_entity(&caps[1]) {
                 // `<`, `>` and `&` stay as entities even in as_char mode,
                 // because emitting them literally would break the markup.
@@ -445,15 +455,16 @@ impl<'a> Emitter<'a> {
                 Some(c) => out.push(c),
                 None => out.push_str(&escape_text(whole.as_str())),
             }
+            prev = Some(';');
             last = whole.end();
         }
-        out.push_str(&self.plain_segment(&raw[last..]));
+        out.push_str(&self.plain_segment(&raw[last..], prev));
         out
     }
 
-    fn plain_segment(&self, segment: &str) -> String {
+    fn plain_segment(&self, segment: &str, preceding: Option<char>) -> String {
         let unescaped = unescape_backslashes(segment);
-        let text = if self.smart { smartify(&unescaped) } else { unescaped };
+        let text = if self.smart { smartify(&unescaped, preceding) } else { unescaped };
         escape_text(&text)
     }
 
@@ -603,13 +614,13 @@ fn rewrite_inline_html(html: &str) -> String {
 }
 
 /// Kramdown's typographic substitutions with `entity_output: as_char`.
-fn smartify(s: &str) -> String {
+fn smartify(s: &str, preceding: Option<char>) -> String {
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        let prev = if i == 0 { None } else { Some(chars[i - 1]) };
+        let prev = if i == 0 { preceding } else { Some(chars[i - 1]) };
         match c {
             '-' if chars.get(i + 1) == Some(&'-') && chars.get(i + 2) == Some(&'-') => {
                 out.push('\u{2014}');

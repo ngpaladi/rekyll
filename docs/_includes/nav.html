@@ -1,0 +1,1 @@
+<nav class="nav">{% for item in site.data.nav %}<a href="{{ item.url | relative_url }}"{% if page.url == item.url %} class="here"{% endif %}>{{ item.name }}</a>{% endfor %}</nav>
