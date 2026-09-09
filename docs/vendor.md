@@ -3,9 +3,19 @@ title: Liquid patches
 ---
 
 rekyll uses the `liquid` crate instead of reimplementing Liquid, but getting
-byte-identical output needed seven changes to `liquid-core` 0.26.11. They live
-in `vendor/liquid-core`, get applied through `[patch.crates-io]`, and each one
-is marked with a `rekyll:` comment saying why it's there.
+byte-identical output needed seven changes to `liquid-core` 0.26.11. The
+source of truth is `vendor/rekyll-liquid-core.patch`, about 250 lines, and
+each change is marked with a `rekyll:` comment saying why it's there.
+`vendor/liquid-core` is the patched copy, checked in so builds work offline
+and wired in through `[patch.crates-io]` in `Cargo.toml`. To rebuild it from
+the pristine crates.io tarball plus the patch:
+
+```
+./scripts/vendor.sh
+```
+
+`git status` should come back clean afterwards; if it doesn't, the patch and
+the copy have drifted.
 
 | # | change | why |
 |---|--------|-----|

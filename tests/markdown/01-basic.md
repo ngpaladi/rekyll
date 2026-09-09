@@ -16,3 +16,6 @@ A [link](http://example.com) and a [titled link](http://example.com "Title").
 
 Line with a break at the end  
 and the continuation.
+
+A code span that wraps `across
+lines` keeps the newline, and `` ` `` or ``  x  `` lose one space each side, while ` y ` keeps both.

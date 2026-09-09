@@ -1,5 +1,9 @@
 - name: Overview
   url: /
+- name: Getting started
+  url: /getting-started/
+- name: How it works
+  url: /how-it-works/
 - name: Features
   url: /features/
 - name: Limits

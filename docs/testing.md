@@ -23,6 +23,8 @@ You need `jekyll` 4.3.2 on your `PATH`, and a `ruby` with `kramdown`,
 ./tests/harness/diff.sh 08-timezone    # one fixture
 ./tests/harness/md_diff.sh             # Markdown corpus
 ./tests/harness/filters_diff.sh        # filter corpus
+./tests/harness/units_diff.sh          # YAML scalars and strftime
+./tests/harness/serve_smoke.sh         # the preview server
 ```
 
 `diff.sh` builds every fixture twice, once with `jekyll build` and once with
@@ -58,8 +60,9 @@ diff of both trees printed straight out.
 
 ## Scalar And Date Differentials
 
-Two more differentials cover rules that are dense enough to get subtly wrong
-without noticing:
+`units_diff.sh` covers two rule sets dense enough to get subtly wrong
+without noticing. Each is a Ruby script and a Rust example that print the
+same tab-separated lines, diffed against each other:
 
 ```
 ruby tests/harness/psych_ref.rb tests/harness/scalars.txt
@@ -69,4 +72,15 @@ ruby tests/harness/strftime_ref.rb tests/harness/strftime_fmts.txt
 cargo run --example strftime_dump tests/harness/strftime_fmts.txt
 ```
 
-Diff each pair against each other.
+Add a line to `scalars.txt` or `strftime_fmts.txt` and both sides pick it
+up. That's how the `strftime-ruby` crate earned its place: I added
+`%-10A`, `%^#p` and `%+` to the list and the hand-written version got all
+three wrong.
+
+## The Server
+
+`serve_smoke.sh` starts `rekyll serve` on port 4321 against this docs site
+and checks with `curl` that pages route (`/features` finds
+`features.html`), that `../` and `%2e%2e` get a 404, that the reload script
+is in served HTML and not in served CSS or the file on disk, and that
+`--no-livereload` leaves it out.

@@ -386,9 +386,25 @@ impl<'a> Emitter<'a> {
                     continue;
                 }
                 Event::Code(c) => {
+                    // kramdown keeps a code span's text as written, newlines
+                    // included, where CommonMark turns line endings into
+                    // spaces; so read it back from the source.
+                    let range = events[i].1.clone();
+                    let span = self.source.get(range.clone());
+                    // A lone backtick between whitespace ("a ` b ` c") is not
+                    // a code span to kramdown; the text stays literal.
+                    let after_space = self.source[..range.start].chars().next_back().is_none_or(char::is_whitespace);
+                    if let Some(span) = span.filter(|s| !s.starts_with("``") && after_space) {
+                        if span[1..].starts_with(char::is_whitespace) {
+                            self.out.push_str(&escape_text(span));
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    let text = span.and_then(codespan_text).unwrap_or(c);
                     self.out.push_str(&format!(
                         "<code class=\"language-{DEFAULT_LANG} highlighter-rouge\">{}</code>",
-                        escape_html(c)
+                        escape_html(text)
                     ));
                 }
                 Event::Html(h) | Event::InlineHtml(h) => {
@@ -599,6 +615,18 @@ fn escape_attr(s: &str) -> String {
 }
 
 /// Kramdown emits XHTML, so raw void elements written as HTML gain a slash.
+/// `Kramdown::Parser::Kramdown#parse_codespan`: the text between the backtick
+/// runs, verbatim; a run of two or more backticks also drops one leading and
+/// one trailing space.
+fn codespan_text(span: &str) -> Option<&str> {
+    let ticks = span.len() - span.trim_start_matches('`').len();
+    let inner = span.get(ticks..span.len().checked_sub(ticks)?)?;
+    if ticks == 1 {
+        return Some(inner);
+    }
+    Some(inner.strip_prefix(' ').unwrap_or(inner).strip_suffix(' ').unwrap_or(inner))
+}
+
 fn rewrite_inline_html(html: &str) -> String {
     let re = regex::Regex::new(
         r"(?i)<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(\s[^>]*?)?\s*/?>",

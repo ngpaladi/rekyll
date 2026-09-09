@@ -20,7 +20,11 @@ through. Markdown matches kramdown 2.4 in GFM mode, and Sass comes out in
 libsass `:compact` style, which is what jekyll-sass-converter gives you by
 default.
 
-It's one binary, about 8.6 MB. No Ruby, no gems, nothing to install next to it.
+It's one binary, under 10 MB. No Ruby, no gems, nothing to install next to it.
+
+If you've never used Jekyll, [Getting started](/getting-started/) builds a
+site from an empty folder. If you want to know what's inside,
+[How it works](/how-it-works/) goes stage by stage.
 
 ## Requirements
 
@@ -59,12 +63,29 @@ saving a file rebuilds the site and the page in your browser reloads itself.
 If you'd rather it didn't, `--no-watch` stops the rebuilding and
 `--no-livereload` stops the page reloading. `--skip-initial-build` serves a
 `_site` you already have without building first. Don't point it at a network,
-it's only meant for looking at your own site. If you don't want the server in
-the binary at all, build with `--no-default-features`.
+it's only meant for looking at your own site. The server is two small crates
+(`tiny_http` and `mime_guess`); if you don't want it in the binary at all,
+build with `--no-default-features`.
 
 The reload works by appending a small script to the HTML the server sends,
 which polls a build counter twice a second. Your built files aren't touched, so
 they still match Jekyll's byte for byte.
+
+## Shipping it
+
+The binary only needs libc, so you can copy it to another machine and it
+runs. Everything compiled into it is under MIT, Apache-2.0, BSD, Zlib or
+Unlicense, all of which let you redistribute as long as the license text and
+copyright notices travel with the binary. They do:
+
+```
+rekyll licenses
+```
+
+prints `THIRD_PARTY_LICENSES.md`, which is embedded at build time and lists
+every crate with its license text (deduplicated, so the MIT text appears
+once with the list of crates it covers). `scripts/licenses.py` regenerates
+it after a dependency change. rekyll itself is MIT.
 
 ## Speed
 
