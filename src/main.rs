@@ -37,6 +37,8 @@ enum Command {
         #[arg(long)]
         no_livereload: bool,
     },
+    /// Print the licenses of everything compiled into this binary.
+    Licenses,
 }
 
 #[derive(clap::Args)]
@@ -57,6 +59,12 @@ impl Paths {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Licenses => {
+            // Ignore a closed pipe (`rekyll licenses | head`).
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(include_bytes!("../THIRD_PARTY_LICENSES.md"));
+            Ok(())
+        }
         Command::Build { paths } => rekyll::build::build(&paths.source, &paths.destination()),
 
         #[cfg(feature = "serve")]

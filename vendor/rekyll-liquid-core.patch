@@ -1,0 +1,250 @@
+diff -ruN '--exclude=Cargo.lock' '--exclude=Cargo.toml.orig' '--exclude=.cargo_vcs_info.json' '--exclude=.cargo-ok' ./Cargo.toml /home/npaladin/git/rekyll/vendor/liquid-core/Cargo.toml
+--- a/Cargo.toml	2006-07-23 21:21:28.000000000 -0400
++++ b/Cargo.toml	2026-09-08 10:35:04.806719520 -0400
+@@ -58,6 +58,9 @@
+ name = "liquid_core"
+ path = "src/lib.rs"
+ 
++[dependencies.indexmap]
++version = "2"
++
+ [dependencies.anymap2]
+ version = "0.13"
+ 
+diff -ruN '--exclude=Cargo.lock' '--exclude=Cargo.toml.orig' '--exclude=.cargo_vcs_info.json' '--exclude=.cargo-ok' ./src/model/object/map.rs /home/npaladin/git/rekyll/vendor/liquid-core/src/model/object/map.rs
+--- a/src/model/object/map.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/model/object/map.rs	2026-09-08 10:48:34.101111817 -0400
+@@ -1,7 +1,12 @@
+ //! Type representing a Liquid object, payload of the `Value::Object` variant
+ 
+ use std::borrow::Borrow;
+-use std::collections::hash_map;
++// rekyll: ordered map. Upstream uses std HashMap, whose iteration order is
++// arbitrary and randomly seeded per process. Jekyll exposes Ruby hashes
++// (site.tags, site.categories, site.data, front matter) whose insertion order
++// is observable through `{% for %}`, so an unordered map makes output differ
++// between runs of the same input. IndexMap preserves insertion order.
++use indexmap::map as hash_map;
+ use std::fmt::{self, Debug};
+ use std::hash::Hash;
+ use std::iter::FromIterator;
+@@ -19,7 +24,7 @@
+ 
+ type Key = crate::model::KString;
+ 
+-type MapImpl<K, V> = hash_map::HashMap<K, V>;
++type MapImpl<K, V> = indexmap::IndexMap<K, V>;
+ type VacantEntryImpl<'a> = hash_map::VacantEntry<'a, Key, Value>;
+ type OccupiedEntryImpl<'a> = hash_map::OccupiedEntry<'a, Key, Value>;
+ type IterImpl<'a> = hash_map::Iter<'a, Key, Value>;
+@@ -105,7 +110,7 @@
+         Key: Borrow<Q>,
+         Q: Ord + Eq + Hash + ?Sized,
+     {
+-        self.map.remove(key)
++        self.map.shift_remove(key)
+     }
+ 
+     /// Gets the given key's corresponding entry in the map for in-place
+@@ -114,7 +119,7 @@
+     where
+         S: Into<Key>,
+     {
+-        use std::collections::hash_map::Entry as EntryImpl;
++        use indexmap::map::Entry as EntryImpl;
+         match self.map.entry(key.into()) {
+             EntryImpl::Vacant(vacant) => Entry::Vacant(VacantEntry { vacant }),
+             EntryImpl::Occupied(occupied) => Entry::Occupied(OccupiedEntry { occupied }),
+@@ -597,7 +602,7 @@
+     /// ```
+     #[inline]
+     pub fn remove(self) -> Value {
+-        self.occupied.remove()
++        self.occupied.shift_remove()
+     }
+ }
+ 
+diff -ruN '--exclude=Cargo.lock' '--exclude=Cargo.toml.orig' '--exclude=.cargo_vcs_info.json' '--exclude=.cargo-ok' ./src/model/scalar/mod.rs /home/npaladin/git/rekyll/vendor/liquid-core/src/model/scalar/mod.rs
+--- a/src/model/scalar/mod.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/model/scalar/mod.rs	2026-09-08 10:55:31.623603652 -0400
+@@ -87,7 +87,7 @@
+     pub fn into_string(self) -> KString {
+         match self.0 {
+             ScalarCowEnum::Integer(x) => x.to_string().into(),
+-            ScalarCowEnum::Float(x) => x.to_string().into(),
++            ScalarCowEnum::Float(x) => ruby_float_to_s(x).into(),
+             ScalarCowEnum::Bool(x) => x.to_string().into(),
+             ScalarCowEnum::DateTime(x) => x.to_string().into(),
+             ScalarCowEnum::Date(x) => x.to_string().into(),
+@@ -314,16 +314,42 @@
+ impl_copyable!(u32, i64);
+ impl_copyable!(i32, i64);
+ 
++// rekyll: Ruby's Float#to_s always keeps a decimal point, so `1.5 | plus: 1.5`
++// renders "3.0" in Jekyll where Rust's f64 Display gives "3". Liquid values
++// reach templates through this impl, so the formatting belongs here.
++struct RubyFloat(f64);
++
++impl fmt::Display for RubyFloat {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(&ruby_float_to_s(self.0))
++    }
++}
++
++pub(crate) fn ruby_float_to_s(x: f64) -> String {
++    if x.is_nan() {
++        return "NaN".to_owned();
++    }
++    if x.is_infinite() {
++        return if x > 0.0 { "Infinity".to_owned() } else { "-Infinity".to_owned() };
++    }
++    let s = x.to_string();
++    if s.contains('.') || s.contains('e') || s.contains('E') {
++        s
++    } else {
++        format!("{s}.0")
++    }
++}
++
+ impl ValueView for f64 {
+     fn as_debug(&self) -> &dyn fmt::Debug {
+         self
+     }
+ 
+     fn render(&self) -> DisplayCow<'_> {
+-        DisplayCow::Borrowed(self)
++        DisplayCow::Owned(Box::new(RubyFloat(*self)))
+     }
+     fn source(&self) -> DisplayCow<'_> {
+-        DisplayCow::Borrowed(self)
++        DisplayCow::Owned(Box::new(RubyFloat(*self)))
+     }
+     fn type_name(&self) -> &'static str {
+         "fractional number"
+diff -ruN '--exclude=Cargo.lock' '--exclude=Cargo.toml.orig' '--exclude=.cargo_vcs_info.json' '--exclude=.cargo-ok' ./src/parser/grammar.pest /home/npaladin/git/rekyll/vendor/liquid-core/src/parser/grammar.pest
+--- a/src/parser/grammar.pest	2006-07-23 21:21:28.000000000 -0400
++++ b/src/parser/grammar.pest	2026-09-08 10:40:03.897770480 -0400
+@@ -57,7 +57,17 @@
+ 
+ Range = { "(" ~ Value ~ ".." ~ Value ~ ")" }
+ 
+-TagToken = _{ Range | FilterChain | DoubleCharSymbol | SingleCharSymbol }
++// rekyll: UnstructuredToken is a last-resort fallback so that a tag whose
++// arguments do not follow Liquid's grammar still tokenizes, letting the tag
++// implementation read TagTokenIter::raw_markup() and parse its own syntax.
++// Jekyll's tags need this: {% include nav/menu.html a="b" %} and
++// {% post_url 2020-01-01-name %} are not valid Liquid argument lists. It is
++// tried only after every real production fails, so tags that do use Liquid
++// syntax are unaffected; they now report their own error rather than a parse
++// error.
++TagToken = _{ Range | FilterChain | DoubleCharSymbol | SingleCharSymbol | UnstructuredToken }
++
++UnstructuredToken = @{ (!(WHITESPACE | "%}" | "-%}") ~ ANY)+ }
+ 
+ // DoubleCharSymbol must be tried first, otherwise it could be parsed as two SingleCharSymbol instead
+ SingleCharSymbol = _{ GreaterThan | LesserThan | Assign | Comma | Colon }
+diff -ruN '--exclude=Cargo.lock' '--exclude=Cargo.toml.orig' '--exclude=.cargo_vcs_info.json' '--exclude=.cargo-ok' ./src/parser/parser.rs /home/npaladin/git/rekyll/vendor/liquid-core/src/parser/parser.rs
+--- a/src/parser/parser.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/parser/parser.rs	2026-09-08 11:11:57.034893680 -0400
+@@ -215,14 +215,14 @@
+         keyword: Box::new(keyword_args.into_iter()),
+     };
+ 
+-    let f = options.filters.get(name).ok_or_else(|| {
+-        let mut available: Vec<_> = options.filters.plugin_names().collect();
+-        available.sort_unstable();
+-        let available = itertools::join(available, ", ");
+-        Error::with_msg("Unknown filter")
+-            .context("requested filter", name.to_owned())
+-            .context("available filters", available)
+-    })?;
++    // rekyll: Jekyll runs Liquid with strict_filters disabled, where an
++    // unknown filter returns its input unchanged rather than raising. Sites
++    // written for plugins rekyll does not load (jekyll-seo-tag and friends)
++    // would otherwise fail to build instead of rendering without them.
++    let f = match options.filters.get(name) {
++        Some(f) => f,
++        None => return Ok(Box::new(PassthroughFilter)),
++    };
+ 
+     let f = f
+         .parse(args)
+@@ -233,6 +233,27 @@
+     Ok(f)
+ }
+ 
++/// The filter an unknown name resolves to when strict filters are off: it
++/// returns its input, matching Ruby Liquid's `StrainerTemplate#invoke`.
++#[derive(Debug)]
++struct PassthroughFilter;
++
++impl std::fmt::Display for PassthroughFilter {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str("unknown filter")
++    }
++}
++
++impl crate::parser::Filter for PassthroughFilter {
++    fn evaluate(
++        &self,
++        input: &dyn crate::model::ValueView,
++        _runtime: &dyn crate::runtime::Runtime,
++    ) -> Result<crate::model::Value> {
++        Ok(input.to_value())
++    }
++}
++
+ /// Parses a `FilterChain` from a `Pair` with a filter chain.
+ /// This `Pair` must be `Rule::FilterChain`.
+ fn parse_filter_chain(chain: Pair, options: &Language) -> Result<FilterChain> {
+@@ -761,6 +782,10 @@
+ pub struct TagTokenIter<'a> {
+     iter: Box<dyn Iterator<Item = TagToken<'a>> + 'a>,
+     position: ::pest::Position<'a>,
++    // rekyll: the tag's argument text exactly as written. Jekyll's own tags
++    // ({% include f.html a="b" %}, {% highlight rb linenos %}) do not follow
++    // Liquid's argument grammar, so they must parse their own markup.
++    raw: &'a str,
+ }
+ impl<'a> Iterator for TagTokenIter<'a> {
+     type Item = TagToken<'a>;
+@@ -772,12 +797,19 @@
+ }
+ impl<'a> TagTokenIter<'a> {
+     fn new(name: &Pair<'a>, tokens: Pairs<'a>) -> Self {
++        let raw = tokens.as_str();
+         TagTokenIter {
+             iter: Box::new(tokens.map(TagToken::from)),
+             position: name.as_span().end_pos(),
++            raw,
+         }
+     }
+ 
++    /// The tag's arguments as written in the source, before tokenization.
++    pub fn raw_markup(&self) -> &'a str {
++        self.raw
++    }
++
+     /// Creates an error with the given message pointing at the current
+     /// position of the iterator.
+     pub fn raise_error(&mut self, error_msg: &str) -> Error {
+diff -ruN '--exclude=Cargo.lock' '--exclude=Cargo.toml.orig' '--exclude=.cargo_vcs_info.json' '--exclude=.cargo-ok' ./src/runtime/stack.rs /home/npaladin/git/rekyll/vendor/liquid-core/src/runtime/stack.rs
+--- a/src/runtime/stack.rs	2006-07-23 21:21:28.000000000 -0400
++++ b/src/runtime/stack.rs	2026-09-08 11:06:05.924006607 -0400
+@@ -64,7 +64,7 @@
+         let key = key.to_kstr();
+         let data = &self.data;
+         if data.contains_key(key.as_str()) {
+-            crate::model::find(data.as_value(), path).map(|v| v.into_owned().into())
++            crate::model::find(data.as_value(), path)
+         } else {
+             self.parent.get(path)
+         }
+@@ -304,7 +304,6 @@
+         let data = &self.data;
+         data.get(key.as_str())
+             .and_then(|_| crate::model::try_find(data.as_value(), path))
+-            .map(|v| v.into_owned().into())
+             .ok_or_else(|| Error::with_msg("Unknown variable").context("requested variable", key))
+     }
+ 
