@@ -44,16 +44,17 @@ against.
 ## Usage
 
 ```
-rekyll build -s path/to/site -d path/to/_site
+cd my-site
+rekyll build
 ```
 
-Both flags are optional. `-s` defaults to wherever you are and `-d` to
-`<source>/_site`.
+That writes `_site/`, same as Jekyll. If the site's somewhere else, `-s` points
+at it and `-d` says where the output goes.
 
 If you want to look at the result, build and serve in one go:
 
 ```
-rekyll serve -s docs -d docs/_site
+rekyll serve
 ```
 
 That puts it on `http://127.0.0.1:4000`, same default as Jekyll, and `-H` and

@@ -36,8 +36,13 @@ $ ./tests/harness/all.sh
 
 ```
 cargo install --path . --locked
-rekyll build -s path/to/site -d path/to/_site
+cd path/to/site
+rekyll build          # writes _site/
+rekyll serve          # builds, serves on http://127.0.0.1:4000, rebuilds on save
 ```
+
+`-s` and `-d` override the source and destination when you're not inside the
+site (`rekyll build -s path/to/site -d out`).
 
 `--locked` matters: `cargo install` otherwise re-resolves dependencies and
 picks a `kstring` that needs a newer rustc than this crate is built against.
@@ -51,7 +56,7 @@ fixture 11, so it is byte-identical to Jekyll's build of the same tree by
 construction. To read it locally:
 
 ```
-rekyll serve -s docs -d docs/_site          # http://127.0.0.1:4000
+cd docs && rekyll serve                     # http://127.0.0.1:4000
 ```
 
 `serve` is a default Cargo feature (it pulls in `tiny_http` and
