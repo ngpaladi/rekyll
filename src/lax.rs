@@ -56,8 +56,6 @@ impl LaxValue {
             RValue::Int(i) => LaxValue::Scalar(Scalar::new(*i)),
             RValue::Float(x) => LaxValue::Scalar(Scalar::new(*x)),
             RValue::Str(s) => LaxValue::Scalar(Scalar::new(s.clone())),
-            // Times cross as their Ruby `to_s` form; the date filters re-parse.
-            RValue::Date { .. } => LaxValue::Scalar(Scalar::new(v.to_string())),
             RValue::Array(a) => LaxValue::Array(a.iter().map(LaxValue::from_value).collect()),
             RValue::Object(o) => LaxValue::Object(LaxObject::from_value_object(o)),
         }

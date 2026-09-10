@@ -34,7 +34,7 @@ Liquid 5.4. rekyll matches both.
 ./tests/harness/diff.sh 08-timezone    # one fixture
 ./tests/harness/md_diff.sh             # Markdown corpus
 ./tests/harness/filters_diff.sh        # filter corpus
-./tests/harness/units_diff.sh          # YAML scalars and strftime
+./tests/harness/units_diff.sh          # strftime formats
 ./tests/harness/serve_smoke.sh         # the preview server
 ```
 
@@ -69,22 +69,18 @@ Make `tests/fixtures/NN-name/` with a `_config.yml` that pins `timezone` and
 `time`, then run `./tests/harness/diff.sh NN-name`. If it fails you get the
 diff of both trees printed straight out.
 
-## Scalar And Date Differentials
+## The strftime Differential
 
-`units_diff.sh` covers two rule sets dense enough to get subtly wrong
-without noticing. Each is a Ruby script and a Rust example that print the
+`units_diff.sh` covers Ruby's `strftime`, a rule set dense enough to get
+subtly wrong without noticing. A Ruby script and a Rust example print the
 same tab-separated lines, diffed against each other:
 
 ```
-ruby tests/harness/psych_ref.rb tests/harness/scalars.txt
-cargo run --example scalars tests/harness/scalars.txt
-
 ruby tests/harness/strftime_ref.rb tests/harness/strftime_fmts.txt
 cargo run --example strftime_dump tests/harness/strftime_fmts.txt
 ```
 
-Add a line to `scalars.txt` or `strftime_fmts.txt` and both sides pick it
-up. That's how the `strftime-ruby` crate earned its place: I added
+Add a line to `strftime_fmts.txt` and both sides pick it up. That's how the `strftime-ruby` crate earned its place: I added
 `%-10A`, `%^#p` and `%+` to the list and the hand-written version got all
 three wrong.
 

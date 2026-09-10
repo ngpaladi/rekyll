@@ -73,9 +73,10 @@ generated site:
 
 - **Configuration** — the full `DEFAULTS` set, deep merge semantics, default
   collections and excludes, permalink styles.
-- **YAML** — Ruby's Psych, which is YAML **1.1**: `yes`/`on` are booleans,
-  `010` is octal, `1_000` and `1,000` are 1000, `1e3` is a *string*, quoted
-  scalars are never type-resolved. Diffed scalar by scalar against Psych.
+- **YAML** — read with `yaml-rust2`'s own typing (YAML 1.2, with anchors,
+  aliases and `<<:` merge keys), plus Ruby's one date rule that changes
+  output: a front-matter timestamp with no zone is a UTC instant. See
+  "What differs" for the 1.1 scalars this does not reproduce.
 - **Front matter, pages, layouts** — layout chains, `layout: none`, nested
   layout data merging.
 - **Posts and collections** — filename and front-matter dates in the site
@@ -127,6 +128,13 @@ hit first. A stock `jekyll new` site uses the `minima` theme, whose layouts and
 includes live inside a gem. rekyll will build it without erroring and without
 layouts, which is worse than failing. `jekyll new --blank` has no theme and is
 covered by fixture 09.
+
+**YAML 1.1 scalars.** Ruby's YAML is 1.1; rekyll uses the crate's 1.2
+typing, so `yes`/`no`/`on`/`off` are strings, `010` is 10, `1e3` is a float,
+`12:00` is a string, and timestamps stay strings (so `{{ page.date }}` on a
+*page* prints what you wrote, where Jekyll prints Ruby's `Time#to_s`). Posts
+are unaffected: their dates are parsed and normalised either way. Write
+`true`/`false` and quote what you mean literally, as you should anyway.
 
 **Also not implemented**: drafts (`_drafts`), pagination, `site.related_posts`,
 CoffeeScript, TOML config, non-YAML data files, and incremental builds.
@@ -241,7 +249,7 @@ The harnesses are the specification.
 | `tests/harness/diff.sh [fixture…]` | full `_site` trees, `jekyll build` vs `rekyll build` |
 | `tests/harness/md_diff.sh` | the Markdown corpus against kramdown 2.4 + GFM |
 | `tests/harness/filters_diff.sh` | filter expressions against Ruby Liquid 5.4 |
-| `tests/harness/units_diff.sh` | YAML scalars against Psych; strftime against Ruby's `Time#strftime` |
+| `tests/harness/units_diff.sh` | strftime formats against Ruby's `Time#strftime` |
 | `tests/harness/serve_smoke.sh` | `rekyll serve`: routing, traversal refusal, reload injection |
 
 Requires `jekyll` (4.3.2) on `PATH`; `tests/harness/Gemfile` pins the exact
@@ -258,8 +266,7 @@ In the order a build touches them:
 src/main.rs       the CLI: build, serve, licenses
 src/build.rs      read, render, clean, write
 src/config.rs     Jekyll's DEFAULTS, merge order, front-matter defaults
-src/value.rs      the YAML/Ruby value type (ordered hashes, Time)
-src/yaml.rs       YAML 1.1 scalar resolution, ported from Psych
+src/value.rs      the YAML/Ruby value type (ordered hashes) and YAML loading
 src/site.rs       reading: front matter, entry filtering, pages, URLs
 src/document.rs   collections, posts, permalink placeholders
 src/url.rs        permalink escaping, relative_url/absolute_url, slugify

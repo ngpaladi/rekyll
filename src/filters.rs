@@ -435,13 +435,6 @@ fn render_value(v: &RValue, json: bool) -> String {
         RValue::Int(i) => i.to_string(),
         RValue::Float(x) => crate::value::ruby_float_to_s(*x),
         RValue::Str(s) => json_string(s),
-        RValue::Date { .. } => {
-            if json {
-                json_string(&v.to_string())
-            } else {
-                v.to_string()
-            }
-        }
         RValue::Array(a) => {
             let items: Vec<String> = a.iter().map(|x| render_value(x, json)).collect();
             format!("[{}]", items.join(if json { "," } else { ", " }))

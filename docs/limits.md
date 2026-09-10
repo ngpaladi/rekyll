@@ -24,6 +24,18 @@ site. A `jekyll new --blank` site has no theme and works fine.
 **TOML config**, data files that aren't YAML (`.csv`, `.json`, `.tsv`),
 CoffeeScript, and `site.related_posts`.
 
+## YAML 1.1 Spellings
+
+Ruby's YAML parser is a 1.1 parser; rekyll uses a 1.2 one and doesn't try to
+paper over the difference. So `yes`, `no`, `on` and `off` are strings (write
+`true` and `false`), `010` is ten rather than eight, `1e3` is a float rather
+than a string, `12:00` is a string rather than 43200, and timestamps aren't
+turned into time objects. That last one only shows if you print a *page's*
+`date` or a `_data` timestamp straight into a template: you get the text you
+wrote, where Jekyll prints Ruby's `Time#to_s`. Posts are fine, because their
+dates get parsed and normalised either way, and a post timestamp with no
+zone is still read as UTC the way Ruby reads it.
+
 ## sample
 
 `sample` works, but it can't match Jekyll, because Jekyll's calls Ruby's

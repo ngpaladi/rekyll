@@ -33,7 +33,7 @@ source tree ──► site.rs ──► Site { pages, posts, collections, static
 
 ## 1. Configuration
 
-**File:** `src/config.rs`, `src/yaml.rs`. **Jekyll:** `configuration.rb`.
+**File:** `src/config.rs`, `src/value.rs`. **Jekyll:** `configuration.rb`.
 
 Jekyll starts from a big `DEFAULTS` hash and deep-merges your `_config.yml`
 over it. rekyll keeps that hash as a YAML string in `config.rs` so it goes
@@ -43,14 +43,14 @@ top-level `permalink` style becomes the posts collection's permalink
 template.
 
 **The quirk:** Ruby's YAML is YAML 1.1, and every Rust YAML crate is 1.2.
-`yes` is a boolean, `010` is octal (8), `1_000` is a thousand, `12:00` is
-43200 (base 60, really), and `1e3` is a *string* because 1.1's float pattern
-insists on a decimal point. `yaml.rs` uses `yaml-rust2` for the parsing but
-throws away its type guesses and reruns Psych's own rules
-(`scalar_scanner.rb`) over the raw text. Quoted scalars are never resolved.
+`yes` is a boolean there, `010` is octal, `12:00` is 43200 (base 60, really)
+and `1e3` is a *string*. rekyll used to port Psych's scalar rules line by
+line; it now takes `yaml-rust2`'s typing as it comes, with one exception in
+stage 3. The `Yaml` to `Value` conversion is 30 lines in `value.rs`,
+including `<<:` merge keys. If you're replicating this, that's the trade to
+make: a YAML crate plus a list of what you gave up, not a second parser.
 
-**Test:** `./tests/harness/units_diff.sh` diffs 50-odd scalars against
-Psych.
+**Test:** every fixture's `_config.yml` and front matter goes through it.
 
 ## 2. Reading the tree
 
@@ -90,9 +90,10 @@ A post's date comes from front matter, or failing that from the filename.
 Either way Jekyll runs `Time.parse(string).localtime`, with the process
 timezone set to your `timezone:`. `time.rs` does the same with `chrono-tz`:
 parse, and if there's no zone on it, interpret the wall-clock time in the
-site zone (Psych's unzoned-means-UTC rule already happened at stage 1 if the
-date came from YAML). DST gaps resolve the way Ruby resolves them, to the
-earlier candidate.
+site zone. One rule survives from Ruby's YAML: a front-matter timestamp with
+a time of day and no zone is a UTC instant, because that's how Psych read it
+before Jekyll ever saw it, and it decides which day a post lands on. DST gaps
+resolve the way Ruby resolves them, to the earlier candidate.
 
 `RTime` carries the zone abbreviation alongside the instant, because `%Z`
 prints `EST` for a time that came through `localtime` and nothing for one

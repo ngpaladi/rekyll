@@ -1,5 +1,4 @@
 pub mod value;
-pub mod yaml;
 pub mod config;
 pub mod url;
 pub mod site;

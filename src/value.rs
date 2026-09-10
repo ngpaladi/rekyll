@@ -1,11 +1,14 @@
-//! The universal document/config value type.
+//! The universal document/config value type, and YAML loading into it.
 //!
 //! Mirrors the Ruby object graph Jekyll builds from YAML: insertion-ordered
-//! hashes, integers distinct from floats, and `Time` as a first-class scalar.
+//! hashes and integers distinct from floats. YAML is read with `yaml-rust2`'s
+//! own (YAML 1.2) typing rather than Psych's 1.1 rules, so `yes` is a string
+//! and `010` is ten; dates stay strings and are parsed where they are used.
 
-use chrono::{DateTime, FixedOffset};
+use anyhow::{anyhow, Result};
 use indexmap::IndexMap;
 use std::fmt;
+use yaml_rust2::{Yaml, YamlLoader};
 
 pub type Object = IndexMap<String, Value>;
 
@@ -16,9 +19,6 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Str(String),
-    /// A YAML timestamp. `date_only` records whether the source scalar carried
-    /// only a date, which changes how Ruby renders it via `to_s`.
-    Date { at: DateTime<FixedOffset>, date_only: bool },
     Array(Vec<Value>),
     Object(Object),
 }
@@ -88,7 +88,6 @@ impl fmt::Display for Value {
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(x) => write!(f, "{}", ruby_float_to_s(*x)),
             Value::Str(s) => write!(f, "{s}"),
-            Value::Date { at, date_only } => write!(f, "{}", ruby_time_to_s(at, *date_only)),
             Value::Array(a) => {
                 // Ruby's Array#to_s is `inspect`, but Liquid joins with "".
                 for v in a {
@@ -124,11 +123,39 @@ pub fn ruby_float_to_s(x: f64) -> String {
     }
 }
 
-/// Ruby `Time#to_s` => "2020-01-02 03:04:05 +0000"; `Date#to_s` => "2020-01-02".
-pub fn ruby_time_to_s(at: &DateTime<FixedOffset>, date_only: bool) -> String {
-    if date_only {
-        at.format("%Y-%m-%d").to_string()
-    } else {
-        at.format("%Y-%m-%d %H:%M:%S %z").to_string()
+/// Load the first YAML document in `src`; an empty stream is `Null`.
+pub fn load_yaml(src: &str) -> Result<Value> {
+    let docs = YamlLoader::load_from_str(src).map_err(|e| anyhow!("YAML parse error: {e}"))?;
+    Ok(docs.into_iter().next().map(from_yaml).unwrap_or(Value::Null))
+}
+
+fn from_yaml(y: Yaml) -> Value {
+    match y {
+        Yaml::Null | Yaml::BadValue | Yaml::Alias(_) => Value::Null,
+        Yaml::Boolean(b) => Value::Bool(b),
+        Yaml::Integer(i) => Value::Int(i),
+        Yaml::Real(r) => r.parse().map(Value::Float).unwrap_or(Value::Str(r)),
+        Yaml::String(s) => Value::Str(s),
+        Yaml::Array(a) => Value::Array(a.into_iter().map(from_yaml).collect()),
+        Yaml::Hash(h) => {
+            let mut out = Object::new();
+            for (k, v) in h {
+                // Jekyll only ever reads string keys; others are stringified.
+                let key = from_yaml(k).to_string();
+                if key == "<<" {
+                    // A merge key splices in another mapping, or a list of
+                    // them, at this position, as Ruby's YAML does.
+                    let parts = match v { Yaml::Array(a) => a, other => vec![other] };
+                    for m in parts {
+                        if let Value::Object(o) = from_yaml(m) {
+                            out.extend(o);
+                        }
+                    }
+                    continue;
+                }
+                out.insert(key, from_yaml(v));
+            }
+            Value::Object(out)
+        }
     }
 }

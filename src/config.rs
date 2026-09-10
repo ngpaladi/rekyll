@@ -104,7 +104,7 @@ pub struct Config(pub Object);
 
 impl Config {
     pub fn defaults() -> Config {
-        let v = crate::yaml::load(DEFAULTS_YAML).expect("built-in defaults must parse");
+        let v = crate::value::load_yaml(DEFAULTS_YAML).expect("built-in defaults must parse");
         Config(v.as_object().cloned().unwrap_or_default())
     }
 
@@ -120,7 +120,7 @@ impl Config {
 
         if let Some(path) = file {
             let text = std::fs::read_to_string(&path)?;
-            let user = crate::yaml::load(&text)?;
+            let user = crate::value::load_yaml(&text)?;
             if let Some(user) = user.as_object() {
                 cfg.0 = deep_merge(&cfg.0, user);
             }

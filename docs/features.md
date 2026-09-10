@@ -8,11 +8,10 @@ Everything here is checked byte-for-byte against Jekyll 4.3.2. See
 ## Configuration
 
 rekyll reads `_config.yml` or `_config.yaml` and applies the same `DEFAULTS`
-Jekyll does, merged the same way. Your scalars get resolved under Ruby's YAML
-1.1 rules, not 1.2, which is a bigger deal than it sounds: `yes` and `on` are
-booleans, `010` is octal, `1_000` and `1,000` both come out as 1000, and `1e3`
-is a string, because the float pattern wants a decimal point in it. Anything
-you quote is left alone as a string.
+Jekyll does, merged the same way. Anchors, aliases and `<<:` merge keys work.
+The parser is a plain YAML 1.2 one, so `true`/`false` are your booleans and
+anything you quote is a string; the YAML 1.1 spellings Ruby also accepts are
+listed under [Limits]({{ "/limits/" | relative_url }}).
 
 Keys you can use include `collections`, `defaults`, `include`, `exclude`,
 `keep_files`, `permalink`, `timezone`, `time`, `future`, `unpublished`,
@@ -48,8 +47,8 @@ Worth knowing, because it surprised me: if your timezone is
 `America/New_York` and you write `date: 2020-01-02 03:04:05` with no zone on
 it, the post publishes at `/2020/01/01/`. Ruby's YAML parser reads an unzoned
 time as a UTC instant, and `localtime` then drags it back to the previous
-evening. rekyll does the same thing, so your posts land where Jekyll would put
-them.
+evening. rekyll keeps that one rule on purpose, so your posts land where
+Jekyll would put them.
 
 ## Layouts And Includes
 

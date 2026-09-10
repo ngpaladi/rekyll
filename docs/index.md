@@ -11,10 +11,9 @@ plugin-compatible.
 ## Overview
 
 A build reads your site, works out the front matter and dates, renders Liquid,
-converts Markdown and Sass, and writes everything out. Your config gets parsed
-with Ruby's YAML 1.1 rules (the ones Ruby's parser actually uses, not the 1.2
-rules every Rust YAML crate implements), so `yes` is a boolean and `010` is
-octal. Liquid runs lax the way Jekyll runs it, so an undefined variable renders
+converts Markdown and Sass, and writes everything out. YAML is read with a
+normal YAML 1.2 parser, so write `true` and `false` (Ruby's parser would also
+take `yes` and `no`; see [Limits]({{ "/limits/" | relative_url }})). Liquid runs lax the way Jekyll runs it, so an undefined variable renders
 empty instead of blowing up, and a filter you don't have just passes its input
 through. Markdown matches kramdown 2.4 in GFM mode, and Sass comes out in
 libsass `:compact` style, which is what jekyll-sass-converter gives you by

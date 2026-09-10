@@ -328,7 +328,15 @@ impl Site {
         populate_title(&mut data, relative_path, &basename_without_ext);
 
         // The filename date seeds `date` unless front matter already set one.
+        // Ruby's YAML reads a front-matter timestamp with no zone as a UTC
+        // instant (then Jekyll shows it in the site zone), so one is appended;
+        // a bare date, or the filename date, is site-local like Time.parse.
         let mut date_source = data.get("date").filter(|v| v.truthy()).map(|v| v.to_string());
+        if let Some(d) = &mut date_source {
+            if UNZONED_TIMESTAMP.is_match(d) {
+                d.push_str(" +0000");
+            }
+        }
         if date_source.is_none() {
             if let Some(c) = DATE_FILENAME.captures(relative_path) {
                 date_source = Some(c[1].to_string());
@@ -705,7 +713,7 @@ fn read_data_dir(dir: &Path) -> Result<Object> {
             continue;
         }
         let text = std::fs::read_to_string(&path)?;
-        out.insert(key.to_string(), crate::yaml::load(&text)?);
+        out.insert(key.to_string(), crate::value::load_yaml(&text)?);
     }
     Ok(out)
 }
@@ -724,6 +732,10 @@ pub struct FrontMatter {
 static FRONT_MATTER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?sm)\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)").unwrap());
 
+/// A YAML timestamp with a time of day and no zone (Psych's `TIME` pattern).
+static UNZONED_TIMESTAMP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d{4}-\d{1,2}-\d{1,2}(?:[Tt]|\s+)\d{1,2}:\d\d:\d\d(?:\.\d*)?$").unwrap());
+
 /// `Utils.has_yaml_header?`: the cheap check that decides a file is a page.
 static FRONT_MATTER_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A---\s*\r?\n").unwrap());
 
@@ -737,7 +749,7 @@ pub fn parse_front_matter(text: &str) -> (FrontMatter, Option<anyhow::Error>) {
     let content = text[caps.get(0).unwrap().end()..].to_string();
     // A front-matter block holding only comments parses to nil, which Jekyll
     // turns into an empty hash rather than an error.
-    let (data, error) = match crate::yaml::load(yaml_src) {
+    let (data, error) = match crate::value::load_yaml(yaml_src) {
         Ok(v) => (v.as_object().cloned().unwrap_or_default(), None),
         Err(e) => (Object::new(), Some(e)),
     };
