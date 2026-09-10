@@ -22,9 +22,9 @@ default.
 
 It's one binary, under 10 MB. No Ruby, no gems, nothing to install next to it.
 
-If you've never used Jekyll, [Getting started](/getting-started/) builds a
+If you've never used Jekyll, [Getting started]({{ "/getting-started/" | relative_url }}) builds a
 site from an empty folder. If you want to know what's inside,
-[How it works](/how-it-works/) goes stage by stage.
+[How it works]({{ "/how-it-works/" | relative_url }}) goes stage by stage.
 
 ## Requirements
 

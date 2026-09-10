@@ -19,8 +19,8 @@ get() { curl -s "$@"; }
 
 pid=$(start); wait_up
 check grep -q "<title>" <(get "http://127.0.0.1:$PORT/")
-check grep -q "<title>" <(get "http://127.0.0.1:$PORT/features")           # /about for /about.html
-check grep -q "<title>" <(get "http://127.0.0.1:$PORT/features.html")
+check grep -q "<title>" <(get "http://127.0.0.1:$PORT/features")           # a directory serves its index
+check grep -q "<title>" <(get "http://127.0.0.1:$PORT/features/")
 check grep -q "{" <(get "http://127.0.0.1:$PORT/assets/css/main.css")
 check test "$(get -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/nope")" = 404
 check test "$(get -o /dev/null -w '%{http_code}' --path-as-is "http://127.0.0.1:$PORT/../../Cargo.toml")" = 404

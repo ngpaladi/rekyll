@@ -75,9 +75,9 @@ line after the closing `---`, which you can see whenever a template prints
 raw `content`.
 
 **The quirk:** pages are sorted by bare filename, not path. That's why the
-nav in [Getting started](/getting-started/) lists About before Home.
+nav in [Getting started]({{ "/getting-started/" | relative_url }}) lists About before Home.
 (And if two pages share a basename, Jekyll's own order is filesystem
-dependent; see [Limits](/limits/).)
+dependent; see [Limits]({{ "/limits/" | relative_url }}).)
 
 **Test:** fixtures `01-static`, `02-page-layout`, `10-pages`.
 
@@ -149,7 +149,7 @@ page.nope.deeper }}{% endraw %}` is empty, not an error, and real templates
 depend on that constantly. The `liquid` crate errors. `lax.rs` wraps the
 payload in a value type whose every lookup succeeds and returns nil when
 there's nothing there. Hash iteration order also had to match Ruby's
-insertion order, which needed a [patch to liquid-core](/vendor/).
+insertion order, which needed a [patch to liquid-core]({{ "/vendor/" | relative_url }}).
 
 ## 6. Rendering one thing
 
@@ -261,4 +261,4 @@ Stages 1, 2 and 9 get you a site generator that copies files and expands
 templates. Then do 6 with `.html` only, then 3 and 4 so posts have URLs,
 then 7 for Markdown. Keep the differential harness running from the first
 day; you can't tell by reading the output whether it matches, and Jekyll's
-behaviour is the spec. The [Testing](/testing/) page is how to set that up.
+behaviour is the spec. The [Testing]({{ "/testing/" | relative_url }}) page is how to set that up.

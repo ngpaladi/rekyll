@@ -3,7 +3,7 @@ title: Features
 ---
 
 Everything here is checked byte-for-byte against Jekyll 4.3.2. See
-[Testing](/testing/) for how.
+[Testing]({{ "/testing/" | relative_url }}) for how.
 
 ## Configuration
 

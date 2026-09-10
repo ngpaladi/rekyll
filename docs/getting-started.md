@@ -195,6 +195,6 @@ rekyll build
 diff -r _site /path/to/jekyll/_site
 ```
 
-If the diff is empty, you're done. If it isn't, check [Limits](/limits/)
+If the diff is empty, you're done. If it isn't, check [Limits]({{ "/limits/" | relative_url }})
 first: gem themes (`theme: minima` in your config) are the usual reason,
 and highlighted code blocks are the next one.
